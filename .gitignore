@@ -1,0 +1,72 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+backend/.venv/
+
+# Temp python cache folders
+.pycache_tmp/
+
+# =========================
+# Node / Frontend
+# =========================
+node_modules/
+frontend/node_modules/
+
+# Vite / build outputs
+dist/
+frontend/dist/
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# =========================
+# Environment files
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Local app state / databases
+# =========================
+*.db
+*.sqlite
+*.sqlite3
+
+backend/instance/*.db
+backend/instance/*.json
+!backend/instance/.gitkeep
+
+# =========================
+# OS / editor junk
+# =========================
+.DS_Store
+Thumbs.db
+*~
+*.tmp
+*.log
+
+# =========================
+# Aura large/generated artifacts
+# =========================
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.bin
+
+# Generated media (uncomment if needed later)
+# *.wav
+# *.mp3
+# *.flac
+# *.zip

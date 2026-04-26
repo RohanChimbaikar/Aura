@@ -1,0 +1,111 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --aura-bg: 10 10 12;
+  --aura-surface: 17 17 23;
+  --aura-surface-soft: 21 21 28;
+  --aura-border: 255 255 255;
+  --aura-text: 242 243 247;
+  --aura-muted: 138 141 157;
+  --aura-dim: 93 96 114;
+  --aura-accent: 93 87 255;
+  --aura-accent-soft: 93 87 255;
+  --aura-reveal: 114 209 199;
+  --aura-reveal-soft: 114 209 199;
+  --aura-danger: 255 143 131;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.theme-light {
+  color-scheme: light;
+  --aura-bg: 244 245 249;
+  --aura-surface: 255 255 255;
+  --aura-surface-soft: 241 243 248;
+  --aura-border: 78 87 112;
+  --aura-text: 22 24 33;
+  --aura-muted: 89 96 120;
+  --aura-dim: 113 121 145;
+  --aura-accent: 93 87 255;
+  --aura-accent-soft: 93 87 255;
+  --aura-reveal: 61 164 153;
+  --aura-reveal-soft: 61 164 153;
+  --aura-danger: 215 98 84;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: rgb(var(--aura-bg));
+  color: rgb(var(--aura-text));
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+@layer utilities {
+  .aura-steel {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .aura-steel::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.18),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.26),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 18%, transparent 82%, rgba(0, 0, 0, 0.08)),
+      linear-gradient(135deg, rgba(255, 255, 255, 0.08), transparent 28%, transparent 72%, rgba(255, 255, 255, 0.03));
+    mix-blend-mode: screen;
+    opacity: 0.95;
+  }
+
+  .theme-light .aura-steel::after {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.95),
+      inset 0 -1px 0 rgba(78, 87, 112, 0.18),
+      inset 0 0 0 1px rgba(78, 87, 112, 0.08);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.75), transparent 22%, transparent 82%, rgba(78, 87, 112, 0.06)),
+      linear-gradient(135deg, rgba(255, 255, 255, 0.55), transparent 35%, transparent 72%, rgba(78, 87, 112, 0.03));
+    mix-blend-mode: normal;
+    opacity: 0.9;
+  }
+}
+
+@media (min-resolution: 2dppx) {
+  .border,
+  .border-t,
+  .border-r,
+  .border-b,
+  .border-l,
+  .border-dashed {
+    border-width: 0.5px;
+  }
+}

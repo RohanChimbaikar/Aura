@@ -1,0 +1,19 @@
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/3259/158083/3259_158083_000061_000000.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/696/93314/696_93314_000005_000008.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/7190/90542/7190_90542_000074_000000.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/7067/76047/7067_76047_000044_000000.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/2384/152900/2384_152900_000021_000008.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/7078/271888/7078_271888_000049_000001.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/1594/135914/1594_135914_000022_000000.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/405/130895/405_130895_000055_000000.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/1743/142914/1743_142914_000003_000007.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/4267/78186/4267_78186_000004_000002.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/78/369/78_369_000052_000002.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/1088/134315/1088_134315_000009_000000.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/1334/135589/1334_135589_000030_000000.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/3830/12530/3830_12530_000021_000002.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/8609/262281/8609_262281_000067_000000.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/3240/131232/3240_131232_000008_000000.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/8580/287364/8580_287364_000043_000000.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/1578/6379/1578_6379_000035_000000.wav
+/kaggle/input/datasets/luizfelipebjcosta/libri-tts-train-clean-100/train-clean-100/3607/29116/3607_29116_000055_000002.wav [PARTIAL]
