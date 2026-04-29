@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AppSidebar } from './components/AppSidebar'
 import { ContextHeader } from './components/ContextHeader'
 import { LoginScreen } from './screens/LoginScreen'
@@ -38,6 +38,8 @@ import type {
   SelectedAudio,
   User,
 } from './types'
+
+type AnalysisRunStatus = 'idle' | 'loading' | 'success' | 'partial' | 'failed'
 
 const screenFrames: Record<Exclude<NavKey, 'chat'>, ScreenFrame> = {
   encode: {
@@ -144,6 +146,7 @@ function safeTime(value: unknown): number {
 
 function getConversationItemTime(item: ConversationItem): number {
   if (item.type === 'message') return safeTime(item.message.createdAt)
+  if (item.type === 'aura_message') return safeTime(item.message.createdAt)
   return safeTime(item.transfer.createdAt)
 }
 
@@ -196,45 +199,85 @@ function normalizeTransfer(
     createdAt,
     originalFilename:
       transfer.originalFilename ||
-      transfer.metadata?.file_name ||
+      ((transfer.metadata as { file_name?: string } | undefined)?.file_name) ||
       `${transfer.messageId || transfer.id}.wav`,
     fileSize: transfer.fileSize ?? 0,
   }
 }
 
-function toAuraTransfer(
-  message: {
-    id: string
-    sender?: string
-    receiver?: string
-    audioUrl?: string
-    messageId?: string
-    createdAt?: string
-    timestamp?: string
-    metadata?: AudioTransfer['metadata']
-  },
-  fallbackSender: string,
-  fallbackReceiver: string,
-): AudioTransfer {
-  return normalizeTransfer(
-    {
-      id: message.id,
-      sender: message.sender || fallbackSender,
-      receiver: message.receiver || fallbackReceiver,
-      originalFilename: message.metadata?.file_name || `${message.messageId || message.id}.wav`,
-      fileSize: 0,
-      createdAt:
-        message.createdAt ||
-        message.timestamp ||
-        stableFallbackIsoFromId(message.messageId || message.id),
-      source: 'aura',
-      audioUrl: message.audioUrl,
-      messageId: message.messageId,
-      metadata: message.metadata,
-    },
-    fallbackSender,
-    fallbackReceiver,
+function inferAnalysisSourceType(audio: SelectedAudio | null): 'single' | 'grouped' {
+  if (!audio) return 'single'
+  if (audio.analysisSourceType) return audio.analysisSourceType
+
+  const fileName = audio.selectedPartFilename || audio.fileName || ''
+  const partMatch = fileName.match(/^tx_[^_]+_part_(\d+)_of_(\d+)\.wav$/i)
+
+  if (partMatch) {
+    const totalParts = Number(partMatch[2])
+    return Number.isFinite(totalParts) && totalParts > 1 ? 'grouped' : 'single'
+  }
+
+  if (audio.mode === 'multi') return 'grouped'
+  if ((audio.totalSegments ?? 0) > 1) return 'grouped'
+  if ((audio.segments?.length ?? 0) > 1) return 'grouped'
+
+  // IMPORTANT:
+  // transmissionId alone should NOT force grouped unless we truly know it's multi-part.
+  return 'single'
+}
+
+function getAnalysisRequestKey(audio: SelectedAudio | null): string {
+  if (!audio) return ''
+
+  const sourceType = inferAnalysisSourceType(audio)
+  const fileName = audio.selectedPartFilename || audio.fileName || ''
+  const normalizedTarget =
+    sourceType === 'grouped'
+      ? audio.transmissionId || fileName
+      : audio.audioUrl || fileName || audio.messageId || ''
+
+  return [
+    sourceType,
+    normalizedTarget,
+    audio.selectedPartNumber ?? '',
+    audio.messageId ?? '',
+  ].join(':')
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  if (!error) return false
+  if (error instanceof DOMException && error.name === 'AbortError') return true
+  if (error instanceof Error && error.name === 'AbortError') return true
+
+  const message =
+    error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  const normalized = message.toLowerCase()
+
+  return (
+    normalized.includes('signal is aborted') ||
+    normalized.includes('operation was aborted') ||
+    normalized.includes('aborterror') ||
+    normalized.includes('request aborted') ||
+    normalized.includes('cancelled')
   )
+}
+function getAnalysisStatus(payload: AnalysisPayload): AnalysisRunStatus {
+  const status = (payload.status || '').toLowerCase()
+
+  if (status === 'partial') return 'partial'
+
+  if (
+    status === 'failed' ||
+    status === 'timed_out' ||
+    status === 'invalid_target' ||
+    status === 'missing_source' ||
+    status === 'not_found' ||
+    status === 'cancelled'
+  ) {
+    return 'failed'
+  }
+
+  return 'success'
 }
 
 function App() {
@@ -247,6 +290,7 @@ function App() {
   const [users, setUsers] = useState<User[]>([])
   const [selectedRecipient, setSelectedRecipient] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
+  const [auraMessages, setAuraMessages] = useState<ChatMessage[]>([])
   const [transfers, setTransfers] = useState<AudioTransfer[]>([])
   const [connectionState, setConnectionState] =
     useState<ConnectionState>('disconnected')
@@ -255,9 +299,13 @@ function App() {
   const [analysis, setAnalysis] = useState<AnalysisPayload | null>(null)
   const [analysisLoading, setAnalysisLoading] = useState(false)
   const [analysisError, setAnalysisError] = useState('')
+  const [hasAttemptedAnalysis, setHasAttemptedAnalysis] = useState(false)
+  const [analysisStatus, setAnalysisStatus] = useState<AnalysisRunStatus>('idle')
   const [booting, setBooting] = useState(true)
   const [authError, setAuthError] = useState('')
   const [chatError, setChatError] = useState('')
+  const analysisRequestSeqRef = useRef(0)
+  const inFlightAnalysisKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
     window.localStorage.setItem('aura-theme', theme)
@@ -290,6 +338,7 @@ function App() {
     if (!currentUser) {
       setUsers([])
       setMessages([])
+      setAuraMessages([])
       setTransfers([])
       setSelectedRecipient('')
       disconnectSocket()
@@ -302,7 +351,7 @@ function App() {
 
     async function bootstrapChat() {
       try {
-        const [nextUsers, nextTransfers, auraMessages] = await Promise.all([
+        const [nextUsers, nextTransfers, nextAuraMessages] = await Promise.all([
           getUsers(),
           getFiles(),
           getMessages(),
@@ -313,18 +362,9 @@ function App() {
           normalizeTransfer(transfer, currentUsername, ''),
         )
 
-        const normalizedAuraTransfers = auraMessages
-          .filter((message) => message.type === 'audio')
-          .map((message) =>
-            toAuraTransfer(
-              message,
-              message.sender || currentUsername,
-              message.receiver || nextUsers[0]?.username || '',
-            ),
-          )
-
         setUsers(nextUsers)
-        setTransfers([...normalizedFiles, ...normalizedAuraTransfers])
+        setTransfers(normalizedFiles)
+        setAuraMessages(nextAuraMessages)
         setSelectedRecipient((current) => {
           if (current && nextUsers.some((user) => user.username === current)) return current
           return nextUsers[0]?.username ?? ''
@@ -400,8 +440,8 @@ function App() {
                 relatedCurrent,
               )
               .sort(
-              (left, right) => safeTime(left.createdAt) - safeTime(right.createdAt),
-            )
+                (left, right) => safeTime(left.createdAt) - safeTime(right.createdAt),
+              )
 
             const unrelated = current.filter((message) => !isActiveConversation(message))
             return [...unrelated, ...merged]
@@ -452,13 +492,27 @@ function App() {
         transfer,
       }))
 
-    return [...relatedMessages, ...relatedTransfers].sort((left, right) => {
+    const relatedAuraMessages = auraMessages
+      .filter(
+        (message) =>
+          (message.sender === currentUser.username && message.receiver === selectedRecipient) ||
+          (message.sender === selectedRecipient && message.receiver === currentUser.username),
+      )
+      .map((message) => ({
+        type: 'aura_message' as const,
+        id: `aura-${message.id}`,
+        timestamp: message.createdAt,
+        message,
+      }))
+
+    return [...relatedMessages, ...relatedTransfers, ...relatedAuraMessages].sort((left, right) => {
       const timeDelta = getConversationItemTime(left) - getConversationItemTime(right)
       if (timeDelta !== 0) return timeDelta
       return left.id.localeCompare(right.id)
     })
-  }, [currentUser, messages, selectedRecipient, transfers])
-    const availableAnalysisAudio = useMemo<SelectedAudio[]>(() => {
+  }, [auraMessages, currentUser, messages, selectedRecipient, transfers])
+
+  const availableAnalysisAudio = useMemo<SelectedAudio[]>(() => {
     if (!currentUser) return []
 
     const map = new Map<string, SelectedAudio>()
@@ -472,6 +526,16 @@ function App() {
         const audioUrl = transfer.audioUrl || (transfer.id ? `/api/files/${transfer.id}/download` : '')
 
         if (!messageId || !audioUrl) return
+
+        // Do NOT re-inject selectedAudio if it's already an /api/outputs/ URL
+        // Prefer durable /api/files/{id}/download items
+        if (
+          selectedAudio?.audioUrl?.startsWith('/api/outputs/') &&
+          transfer.messageId === selectedAudio.messageId &&
+          transfer.audioUrl === selectedAudio.audioUrl
+        ) {
+          return
+        }
 
         const key = `${messageId}-${audioUrl}`
 
@@ -490,34 +554,17 @@ function App() {
     }
 
     return Array.from(map.values())
-  }, [currentUser, selectedAudio, selectedRecipient, transfers])
+  }, [currentUser, selectedAudio, transfers])
 
   useEffect(() => {
-    if (activeScreen !== 'analysis' || !selectedAudio || analysis?.message_id === selectedAudio.messageId) {
-      return
-    }
-
-    let cancelled = false
-    setAnalysisLoading(true)
-    setAnalysisError('')
-    getAnalysis(selectedAudio.messageId)
-      .then((payload) => {
-        if (!cancelled) setAnalysis(payload)
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setAnalysis(null)
-          setAnalysisError(error instanceof Error ? error.message : 'Unable to load analysis.')
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setAnalysisLoading(false)
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [activeScreen, analysis?.message_id, selectedAudio])
+    console.info('[analysis-ui] state', {
+      hasAttemptedAnalysis,
+      isAnalyzing: analysisLoading,
+      analysisStatus,
+      hasResult: analysis != null,
+      hasError: Boolean(analysisError),
+    })
+  }, [analysis, analysisError, analysisLoading, analysisStatus, hasAttemptedAnalysis])
 
   async function handleLogin(username: string, password: string) {
     setAuthError('')
@@ -601,9 +648,7 @@ function App() {
     }
 
     const saved = await createMessage(messagePayload)
-    const transfer = toAuraTransfer(saved, currentUser.username, selectedRecipient)
-
-    setTransfers((current) => dedupeById(current, transfer))
+    setAuraMessages((current) => [...current, saved])
     setSelectedAudio({
       ...selected,
       messageId: saved.messageId || selected.messageId,
@@ -612,30 +657,169 @@ function App() {
     setActiveScreen('chat')
   }
 
-  function handleSelectAudio(audio: SelectedAudio) {
-    setSelectedAudio(audio)
-    setDecodeResult(null)
+ function resetAnalysisStateForNewTarget() {
+  analysisRequestSeqRef.current += 1
+  inFlightAnalysisKeyRef.current = null
+  setAnalysis(null)
+  setAnalysisError('')
+  setAnalysisLoading(false)
+  setAnalysisStatus('idle')
+  setHasAttemptedAnalysis(false)
+}
+
+function handleSelectAudio(audio: SelectedAudio) {
+  const previousKey = getAnalysisRequestKey(selectedAudio)
+  const nextKey = getAnalysisRequestKey(audio)
+
+  if (previousKey && previousKey !== nextKey) {
+    resetAnalysisStateForNewTarget()
   }
 
+  setSelectedAudio(audio)
+  setDecodeResult(null)
+}
   function handleReveal(audio: SelectedAudio) {
     handleSelectAudio(audio)
     setActiveScreen('reveal')
   }
 
-  async function handleAnalyze(audio: SelectedAudio) {
-    handleSelectAudio(audio)
-    setActiveScreen('analysis')
-    setAnalysisLoading(true)
+async function runAnalysis(audio: SelectedAudio, options?: { force?: boolean }) {
+  const requestKey = getAnalysisRequestKey(audio)
+  if (!requestKey) return
+
+  if (inFlightAnalysisKeyRef.current === requestKey && !options?.force) {
+    console.info('[analysis-ui] duplicate request ignored', { requestKey })
+    return
+  }
+
+  const seq = analysisRequestSeqRef.current + 1
+  analysisRequestSeqRef.current = seq
+  inFlightAnalysisKeyRef.current = requestKey
+
+  const sourceType = inferAnalysisSourceType(audio)
+
+  console.info('[analysis-ui] request start', {
+    requestKey,
+    seq,
+    sourceType,
+    target: audio.selectedPartFilename || audio.fileName || audio.messageId,
+    force: Boolean(options?.force),
+  })
+
+  setHasAttemptedAnalysis(true)
+  setAnalysisLoading(true)
+  setAnalysisStatus('loading')
+  setAnalysisError('')
+
+  try {
+    const payload = await getAnalysis(audio)
+    const isCurrent = seq === analysisRequestSeqRef.current
+
+    console.info('[analysis-ui] response received', {
+      requestKey,
+      seq,
+      isCurrent,
+      status: payload?.status,
+      mode: payload?.mode,
+      sourceType: payload?.sourceType,
+      hasSummary: Boolean(payload?.summary),
+      hasRecovery: Boolean(payload?.recovery),
+      hasCharts: Boolean(payload?.charts),
+      hasChunkTable: Array.isArray(payload?.chunkTable),
+    })
+
+    // Ignore stale responses only
+    if (!isCurrent) {
+      console.info('[analysis-ui] stale response ignored', { requestKey, seq })
+      return
+    }
+
+    // IMPORTANT:
+    // Even "minimal" payloads must still be committed.
+    // AnalysisPageV2 already decides whether it's renderable.
+    setAnalysis(payload)
     setAnalysisError('')
-    try {
-      setAnalysis(await getAnalysis(audio.messageId))
-    } catch (error) {
-      setAnalysis(null)
-      setAnalysisError(error instanceof Error ? error.message : 'Unable to load analysis.')
-    } finally {
+    setAnalysisStatus(getAnalysisStatus(payload))
+
+    console.info('[analysis-ui] response committed', {
+      requestKey,
+      seq,
+      finalStatus: getAnalysisStatus(payload),
+    })
+  } catch (error) {
+    const isCurrent = seq === analysisRequestSeqRef.current
+    const abortLike = isAbortLikeError(error)
+    const message = error instanceof Error ? error.message : String(error)
+
+    console.info('[analysis-ui] request error', {
+      requestKey,
+      seq,
+      isCurrent,
+      abort: abortLike,
+      message,
+    })
+
+    if (!isCurrent) {
+      console.info('[analysis-ui] stale error ignored', { requestKey, seq })
+      return
+    }
+
+    // IMPORTANT:
+    // Abort-like errors should NOT wipe a previously valid analysis.
+    // They also should NOT show red failed state unless there is truly no result yet.
+    if (abortLike) {
       setAnalysisLoading(false)
+
+      // If we already had a valid analysis on screen, keep it.
+      if (analysis) {
+        setAnalysisError('')
+        setAnalysisStatus(getAnalysisStatus(analysis))
+        console.info('[analysis-ui] abort ignored, preserving existing analysis', {
+          requestKey,
+          seq,
+        })
+      } else {
+        setAnalysisError('')
+        setAnalysisStatus('idle')
+        console.info('[analysis-ui] abort reset to neutral state', {
+          requestKey,
+          seq,
+        })
+      }
+
+      return
+    }
+
+    setAnalysis(null)
+    setAnalysisError(message || 'Unable to load analysis.')
+    setAnalysisStatus('failed')
+  } finally {
+    if (seq === analysisRequestSeqRef.current) {
+      setAnalysisLoading(false)
+      if (inFlightAnalysisKeyRef.current === requestKey) {
+        inFlightAnalysisKeyRef.current = null
+      }
     }
   }
+}
+
+ async function handleAnalyze(audio: SelectedAudio, options?: { force?: boolean }) {
+  const previousKey = getAnalysisRequestKey(selectedAudio)
+  const nextKey = getAnalysisRequestKey(audio)
+
+  if (!previousKey || previousKey !== nextKey) {
+    resetAnalysisStateForNewTarget()
+  }
+
+  setSelectedAudio(audio)
+  setDecodeResult(null)
+  setActiveScreen('analysis')
+
+  // Only explicit Run Analysis should hit backend
+  if (options?.force) {
+    await runAnalysis(audio, { force: true })
+  }
+}
 
   function handleDecoded(result: DecodeResult) {
     setDecodeResult(result)
@@ -728,6 +912,8 @@ function App() {
                   onAnalyzeAudio={handleAnalyze}
                   loading={analysisLoading}
                   error={analysisError}
+                  hasAttempted={hasAttemptedAnalysis}
+                  status={analysisStatus}
                 />
               ) : null}
 

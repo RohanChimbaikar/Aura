@@ -1,0 +1,38 @@
+{
+  "transmission_id": "4c47d58adc41f07d",
+  "mode": "multi",
+  "version": 1,
+  "original_message_chars": 91,
+  "original_message_bytes": 91,
+  "total_segments": 3,
+  "total_duration_sec": 1200.0,
+  "segments": [
+    {
+      "segment_index": 0,
+      "carrier_id": "carrier_05_10min",
+      "carrier_name": "carrier_05_10min.wav",
+      "carrier_duration_sec": 600.0,
+      "payload_bytes": 48,
+      "stego_file_name": "tx_4c47d58adc41f07d_part_01_of_03.wav",
+      "audio_url": "/outputs/tx_4c47d58adc41f07d_part_01_of_03.wav"
+    },
+    {
+      "segment_index": 1,
+      "carrier_id": "carrier_03_06min",
+      "carrier_name": "carrier_03_06min.wav",
+      "carrier_duration_sec": 360.0,
+      "payload_bytes": 28,
+      "stego_file_name": "tx_4c47d58adc41f07d_part_02_of_03.wav",
+      "audio_url": "/outputs/tx_4c47d58adc41f07d_part_02_of_03.wav"
+    },
+    {
+      "segment_index": 2,
+      "carrier_id": "carrier_02_04min",
+      "carrier_name": "carrier_02_04min.wav",
+      "carrier_duration_sec": 240.0,
+      "payload_bytes": 15,
+      "stego_file_name": "tx_4c47d58adc41f07d_part_03_of_03.wav",
+      "audio_url": "/outputs/tx_4c47d58adc41f07d_part_03_of_03.wav"
+    }
+  ]
+}

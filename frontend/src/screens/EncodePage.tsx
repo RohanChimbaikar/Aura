@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Clock3,
   Download,
-  FileAudio2,
   Hash,
   Layers2,
   Send,
@@ -55,7 +54,6 @@ function StatCard({
 export function EncodePage({
   onSendToChat,
   onSelectAudio,
-  currentUser,
   selectedRecipient,
 }: Props) {
   const [text, setText] = useState(PRESETS[0])
@@ -105,6 +103,19 @@ export function EncodePage({
   }
 
   const canSendToChat = Boolean(selectedRecipient)
+  const planMode = preview?.plan?.mode
+  const isMultiPlanned = planMode === 'multi'
+  const isExceeded = planMode === 'exceeded'
+  const carrierUseCounts =
+    isMultiPlanned && preview?.plan?.segments
+      ? preview.plan.segments.reduce<Record<string, number>>((acc, segment) => {
+          acc[segment.carrierName] = (acc[segment.carrierName] ?? 0) + 1
+          return acc
+        }, {})
+      : {}
+  const carrierSummary = Object.entries(carrierUseCounts)
+    .map(([name, count]) => `${name} x ${count}`)
+    .join(', ')
 
   return (
     <div className="flex flex-col gap-4">
@@ -186,12 +197,31 @@ export function EncodePage({
               <div className="text-[11px] text-aura-dim">
                 {preview ? (
                   <>
-                    Estimated carrier:{' '}
-                    <span className="font-medium text-aura-text">{preview.carrier_alias}</span>
-                    {' · '}
-                    <span className="font-medium text-aura-text">
-                      {preview.required_seconds}s
-                    </span>
+                    {isMultiPlanned ? (
+                      <span>
+                        This message will be transmitted as{' '}
+                        <span className="font-medium text-aura-text">
+                          {preview.plan?.totalSegments} ordered audio parts
+                        </span>
+                        {' · '}
+                        <span className="font-medium text-aura-text">reuse enabled</span>
+                        {' · '}
+                        <span className="font-medium text-aura-text">
+                          {preview.plan?.totalDurationMin} min total
+                        </span>
+                      </span>
+                    ) : isExceeded ? (
+                      <span>This message exceeds Aura&apos;s current safe transmission limit.</span>
+                    ) : (
+                      <span>
+                        Estimated carrier:{' '}
+                        <span className="font-medium text-aura-text">{preview.carrier_alias}</span>
+                        {' · '}
+                        <span className="font-medium text-aura-text">
+                          {preview.required_seconds}s
+                        </span>
+                      </span>
+                    )}
                   </>
                 ) : (
                   'Checking available carrier…'
@@ -201,7 +231,7 @@ export function EncodePage({
               <button
                 type="button"
                 onClick={handleEncode}
-                disabled={busy || !text.trim()}
+                disabled={busy || !text.trim() || isExceeded}
                 className="inline-flex items-center justify-center gap-2 rounded-xl bg-aura-accent px-4 py-2.5 text-[13px] font-semibold text-white shadow-sm transition hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Sparkles size={15} strokeWidth={2.2} />
@@ -218,17 +248,32 @@ export function EncodePage({
                   <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-aura-dim">
                     Encoded audio
                   </div>
-                  <h3 className="mt-1.5 truncate text-[16px] font-semibold text-aura-text">
-                    {result.file_name}
-                  </h3>
+                  <h3 className="mt-1.5 truncate text-[16px] font-semibold text-aura-text">{result.file_name}</h3>
                   <p className="mt-1 text-[12px] text-aura-dim">
-                    Ready to download or send into chat.
+                    {result.mode === 'multi'
+                      ? `Grouped Aura transmission (${result.total_segments ?? 0} parts).`
+                      : 'Ready to download or send into chat.'}
                   </p>
                 </div>
               </div>
 
               <div className="px-4 py-3">
                 <audio controls src={resolveUrl(result.audio_url)} className="w-full" />
+                {result.mode === 'multi' && (result.segments?.length ?? 0) > 1 ? (
+                  <div className="mt-3 grid gap-2">
+                    {(result.segments || [])
+                      .slice()
+                      .sort((a, b) => (a.segment_index ?? a.segmentIndex ?? 0) - (b.segment_index ?? b.segmentIndex ?? 0))
+                      .map((segment, idx, arr) => (
+                        <div key={segment.stego_file_name} className="rounded-lg border border-aura-border/10 bg-aura-bg/30 px-3 py-2 text-[12px] text-aura-muted">
+                          <div className="font-medium text-aura-text">Part {idx + 1} of {arr.length}</div>
+                          <a href={resolveUrl(segment.audio_url)} className="text-aura-reveal hover:underline">
+                            {segment.stego_file_name}
+                          </a>
+                        </div>
+                      ))}
+                  </div>
+                ) : null}
               </div>
 
               <div className="flex flex-wrap gap-2 border-t border-aura-reveal/15 bg-aura-bg/20 px-4 py-3">
@@ -246,11 +291,26 @@ export function EncodePage({
                   onClick={() =>
                     onSendToChat(
                       {
-                        type: 'audio',
+                        type: result.mode === 'multi' ? 'audio_group' : 'audio',
                         direction: 'outgoing',
                         createdAt: new Date().toISOString(),
                         audioUrl: result.audio_url,
                         messageId: result.message_id,
+                        transmissionId: result.transmission_id,
+                        mode: result.mode,
+                        totalSegments: result.total_segments,
+                        segments:
+                          result.mode === 'multi'
+                            ? (result.segments || []).map((segment) => ({
+                                segmentIndex: segment.segment_index,
+                                totalSegments: result.total_segments,
+                                audioUrl: segment.audio_url,
+                                fileName: segment.stego_file_name,
+                                carrierName: segment.carrier_name,
+                                carrierDurationSec: segment.carrier_duration_sec,
+                              }))
+                            : undefined,
+                        manifest: result.manifest,
                         metadata: result,
                       },
                       {
@@ -258,6 +318,20 @@ export function EncodePage({
                         audioUrl: result.audio_url,
                         fileName: result.file_name,
                         source: 'Chat',
+                        mode: result.mode,
+                        transmissionId: result.transmission_id,
+                        totalSegments: result.total_segments,
+                        segments:
+                          result.mode === 'multi'
+                            ? (result.segments || []).map((segment) => ({
+                                segmentIndex: segment.segment_index,
+                                totalSegments: result.total_segments,
+                                audioUrl: segment.audio_url,
+                                fileName: segment.stego_file_name,
+                                carrierName: segment.carrier_name,
+                                carrierDurationSec: segment.carrier_duration_sec,
+                              }))
+                            : undefined,
                         metadata: result,
                       },
                     )
@@ -316,30 +390,71 @@ export function EncodePage({
                 Carrier
               </div>
               <div className="mt-1 text-[12px] text-aura-dim">
-                Aura chooses the smallest carrier that fits this message.
+                {isMultiPlanned
+                  ? 'Ordered multi-part transmission using approved carrier reuse.'
+                  : 'Aura chooses the smallest carrier that fits this message.'}
               </div>
             </div>
 
             <div className="grid gap-2.5">
-              <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
-                  Name
-                </div>
-                <div className="mt-1 font-mono text-[14px] font-semibold text-aura-text">
-                  {preview?.carrier_alias ?? '—'}
-                </div>
-              </div>
+              {isMultiPlanned ? (
+                <>
+                  <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
+                      Mode
+                    </div>
+                    <div className="mt-1 text-[14px] font-semibold text-aura-text">Multi-part transmission</div>
+                  </div>
+                  <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
+                      Parts
+                    </div>
+                    <div className="mt-1 text-[14px] font-semibold text-aura-text">{preview?.plan?.totalSegments ?? '—'}</div>
+                  </div>
+                  <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
+                      Sequence
+                    </div>
+                    <div className="mt-1 text-[14px] font-semibold text-aura-text">Ordered</div>
+                  </div>
+                  <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
+                      Reuse
+                    </div>
+                    <div className="mt-1 text-[14px] font-semibold text-aura-text">Enabled</div>
+                  </div>
+                  {carrierSummary ? (
+                    <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
+                        Carrier summary
+                      </div>
+                      <div className="mt-1 text-[13px] font-medium text-aura-text">{carrierSummary}</div>
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
+                      Name
+                    </div>
+                    <div className="mt-1 font-mono text-[14px] font-semibold text-aura-text">
+                      {preview?.carrier_alias ?? '—'}
+                    </div>
+                  </div>
 
-              <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
-                  Duration
-                </div>
-                <div className="mt-1 text-[16px] font-semibold text-aura-text">
-                  {preview?.carrier_duration_sec
-                    ? `${preview.carrier_duration_sec} sec`
-                    : '—'}
-                </div>
-              </div>
+                  <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
+                      Duration
+                    </div>
+                    <div className="mt-1 text-[16px] font-semibold text-aura-text">
+                      {preview?.carrier_duration_sec
+                        ? `${preview.carrier_duration_sec} sec`
+                        : '—'}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </section>
         </div>

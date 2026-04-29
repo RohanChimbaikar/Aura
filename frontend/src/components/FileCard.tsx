@@ -40,6 +40,14 @@ export function FileCard({ transfer, currentUsername, onReveal, onAnalyze }: Pro
     fileName: transfer.originalFilename,
     source: 'Chat',
     metadata: transfer.metadata,
+    analysisSourceType:
+      transfer.metadata?.mode === 'multi' || (transfer.metadata?.segments?.length ?? 0) > 1
+        ? 'grouped'
+        : 'single',
+    transmissionId: transfer.metadata?.transmission_id,
+    totalSegments: transfer.metadata?.total_segments,
+    segments: transfer.metadata?.segments,
+    selectedPartFilename: transfer.originalFilename,
   }
   const transferDate = new Date(transfer.createdAt)
   const timeLabel = Number.isNaN(transferDate.getTime())
