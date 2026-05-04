@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -7,6 +9,56 @@ from flask import current_app, send_from_directory
 from werkzeug.utils import secure_filename
 
 from services.db import get_db
+
+_SQLITE_TS = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?$"
+)
+
+
+def utc_iso_timestamp(value) -> str:
+    """Normalize DB or API timestamps to UTC ISO-8601 with Z. Never returns empty."""
+    fallback = (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    if value is None:
+        return fallback
+    s = str(value).strip()
+    if not s:
+        return fallback
+
+    m = _SQLITE_TS.match(s)
+    if m:
+        year, month, day, hour, minute, second, frac = m.groups()
+        usec = 0
+        if frac:
+            usec = int((frac + "000000")[:6])
+        dt = datetime(
+            int(year),
+            int(month),
+            int(day),
+            int(hour),
+            int(minute),
+            int(second),
+            usec,
+            tzinfo=timezone.utc,
+        )
+        return dt.isoformat().replace("+00:00", "Z")
+
+    try:
+        normalized = s.replace("Z", "+00:00")
+        if " " in normalized and "T" not in normalized[:11]:
+            normalized = normalized.replace(" ", "T", 1)
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt.isoformat().replace("+00:00", "Z")
+    except ValueError:
+        return fallback
 
 
 def allowed_wav(filename: str) -> bool:
@@ -88,24 +140,32 @@ def get_transfer_by_id(transfer_id: int):
 
 
 def serialize_transfer(row) -> dict:
+    transfer_id = row["id"]
+    created_at = utc_iso_timestamp(row["created_at"])
     return {
-        "id": row["id"],
+        "id": transfer_id,
+        "messageId": str(transfer_id),
         "sender": row["sender"],
         "receiver": row["receiver"],
         "originalFilename": row["original_filename"],
         "storedFilename": row["stored_filename"],
         "fileSize": row["file_size"],
-        "createdAt": row["created_at"],
+        "createdAt": created_at,
         "kind": "file",
+        "source": "upload",
+        "audioUrl": f"/api/files/{transfer_id}/download",
+        "metadata": {},
     }
 
 
 def send_transfer_file(transfer_row):
+    # Serve audio inline for playback in <audio> elements, not as attachment
     return send_from_directory(
         current_app.config["UPLOAD_FOLDER"],
         transfer_row["stored_filename"],
-        as_attachment=True,
+        as_attachment=False,
         download_name=transfer_row["original_filename"],
+        mimetype="audio/wav",
     )
 
 

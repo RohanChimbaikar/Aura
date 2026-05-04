@@ -1,0 +1,43 @@
+{
+  "transmission_id": "7260e7274fa3ffe4",
+  "mode": "multi",
+  "version": 1,
+  "original_message_chars": 66,
+  "original_message_bytes": 66,
+  "total_segments": 2,
+  "total_duration_sec": 960.0,
+  "segments": [
+    {
+      "segment_index": 0,
+      "carrier_id": "carrier_05_10min",
+      "carrier_name": "carrier_05_10min.wav",
+      "carrier_duration_sec": 600.0,
+      "payload_bytes": 48,
+      "stego_file_name": "tx_7260e7274fa3ffe4_part_01_of_02.wav",
+      "audio_url": "/outputs/tx_7260e7274fa3ffe4_part_01_of_02.wav",
+      "generation_id": "gen_357bbe17fc53",
+      "cover_asset_id": "asset_eb8ed7ad2a43",
+      "stego_asset_id": "asset_fa175a217519",
+      "cover_audio_path": "aura_carrier_bank/carrier_05_10min.wav",
+      "stego_audio_path": "outputs/tx_7260e7274fa3ffe4_part_01_of_02.wav",
+      "cover_audio_hash": "690d65c736a2747fa866ba6579353eff31d5bc007f29413c060999f0620267d9",
+      "stego_audio_hash": "cdc3d4d13617369f64c0b5a1eb06a894fe9cabdf9317555ddebce285fdcacbe5"
+    },
+    {
+      "segment_index": 1,
+      "carrier_id": "carrier_03_06min",
+      "carrier_name": "carrier_03_06min.wav",
+      "carrier_duration_sec": 360.0,
+      "payload_bytes": 18,
+      "stego_file_name": "tx_7260e7274fa3ffe4_part_02_of_02.wav",
+      "audio_url": "/outputs/tx_7260e7274fa3ffe4_part_02_of_02.wav",
+      "generation_id": "gen_27011261722a",
+      "cover_asset_id": "asset_6486cc0a766b",
+      "stego_asset_id": "asset_45a40bd02e10",
+      "cover_audio_path": "aura_carrier_bank/carrier_03_06min.wav",
+      "stego_audio_path": "outputs/tx_7260e7274fa3ffe4_part_02_of_02.wav",
+      "cover_audio_hash": "55adc3ab0f1701c2cabd2bf9ca0580ef8265043e65d0956cfd05e2da8bcac979",
+      "stego_audio_hash": "4d6c452ecf47b1ab66d357546358bd695aa8dd41112423719b4e2eeadd7e7528"
+    }
+  ]
+}

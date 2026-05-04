@@ -16,6 +16,7 @@ from services.aura_service import (
     load_messages,
 )
 from services.db import get_db
+from sockets.socket_handlers import emit_aura_chat_message
 
 aura_bp = Blueprint("aura", __name__)
 
@@ -173,7 +174,9 @@ def messages():
 def create_message():
     payload = request.get_json(silent=True) or {}
     payload.setdefault("createdAt", time.strftime("%Y-%m-%dT%H:%M:%S"))
-    return jsonify(add_message(payload)), 201
+    saved = add_message(payload)
+    emit_aura_chat_message(saved)
+    return jsonify(saved), 201
 
 
 @aura_bp.get("/messages/<message_id>/analysis")

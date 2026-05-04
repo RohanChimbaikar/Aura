@@ -1,9 +1,39 @@
 import { useEffect, useRef } from 'react'
 import { BarChart3, Download, FlaskConical, Radio } from 'lucide-react'
+import { Badge } from './AuraPrimitives'
 import { FileCard } from './FileCard'
 import { MessageBubble } from './MessageBubble'
 import { resolveUrl } from '../services/api'
 import type { ChatMessage, ConversationItem, SelectedAudio } from '../types'
+
+const RECENT_INCOMING_AUDIO_MS = 5 * 60 * 1000
+
+function itemTimeMs(item: ConversationItem): number {
+  if (item.type === 'message') {
+    const t = new Date(String(item.message.createdAt)).getTime()
+    return Number.isFinite(t) ? t : 0
+  }
+  if (item.type === 'aura_message') {
+    const t = new Date(String(item.message.createdAt)).getTime()
+    return Number.isFinite(t) ? t : 0
+  }
+  const t = new Date(String(item.transfer.createdAt)).getTime()
+  return Number.isFinite(t) ? t : 0
+}
+
+/** Receiver-side: highlight very recent incoming audio (upload + encode-to-chat). */
+function isIncomingAudioNew(item: ConversationItem, currentUsername: string): boolean {
+  if (Date.now() - itemTimeMs(item) >= RECENT_INCOMING_AUDIO_MS) return false
+  if (item.type === 'file') {
+    return item.transfer.sender !== currentUsername
+  }
+  if (item.type === 'aura_message') {
+    const m = item.message
+    if (m.sender === currentUsername) return false
+    return m.type === 'audio' || m.type === 'audio_group'
+  }
+  return false
+}
 
 type Props = {
   items: ConversationItem[]
@@ -106,6 +136,7 @@ export function ChatWindow({
                 key={item.id}
                 message={item.message}
                 currentUsername={currentUsername}
+                showNew={isIncomingAudioNew(item, currentUsername)}
                 onReveal={onRevealAudio}
                 onAnalyze={onAnalyzeAudio}
               />
@@ -122,6 +153,7 @@ export function ChatWindow({
                   <FileCard
                     transfer={item.transfer}
                     currentUsername={currentUsername}
+                    showNew={isIncomingAudioNew(item, currentUsername)}
                     onReveal={onRevealAudio}
                     onAnalyze={onAnalyzeAudio}
                   />
@@ -139,11 +171,13 @@ export function ChatWindow({
 function AuraMessageCard({
   message,
   currentUsername,
+  showNew,
   onReveal,
   onAnalyze,
 }: {
   message: ChatMessage
   currentUsername: string
+  showNew?: boolean
   onReveal?: (audio: SelectedAudio) => void
   onAnalyze?: (audio: SelectedAudio) => void
 }) {
@@ -179,8 +213,11 @@ function AuraMessageCard({
                 <Radio size={14} className="text-aura-reveal" />
               </div>
               <div>
-                <div className="text-[14px] font-semibold text-aura-text">
-                  {message.type === 'audio_group' ? 'Aura Transmission' : 'Secure audio'}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[14px] font-semibold text-aura-text">
+                    {message.type === 'audio_group' ? 'Aura Transmission' : 'Secure audio'}
+                  </span>
+                  {showNew ? <Badge tone="safe">New</Badge> : null}
                 </div>
                 <p className="mt-0.5 text-[11px] text-aura-dim">
                   {message.type === 'audio_group'

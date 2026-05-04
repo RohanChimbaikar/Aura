@@ -183,25 +183,100 @@ function reconcileIncomingMessage(current: Message[], incoming: Message): Messag
 }
 
 function normalizeTransfer(
-  transfer: AudioTransfer,
+  transfer: AudioTransfer | Record<string, unknown>,
   fallbackSender = '',
   fallbackReceiver = '',
 ): AudioTransfer {
-  const raw = transfer as unknown as Record<string, unknown>
+  const raw = transfer as Record<string, unknown>
   const createdAt =
-    pickTimestamp(raw, ['createdAt', 'created_at', 'timestamp', 'sent_at', 'uploaded_at']) ??
-    stableFallbackIsoFromId(raw.id ?? raw.messageId)
+    pickTimestamp(raw, ['createdAt', 'created_at']) ?? new Date().toISOString()
+
+  const t = transfer as AudioTransfer
+  return {
+    ...t,
+    sender: String(t.sender || fallbackSender),
+    receiver: String(t.receiver || fallbackReceiver),
+    audioUrl: t.audioUrl || (raw.audio_url as string | undefined) || '',
+    originalFilename:
+      t.originalFilename ||
+      (raw.original_filename as string | undefined) ||
+      (raw.file_name as string | undefined) ||
+      `${String(t.messageId ?? raw.message_id ?? t.id)}.wav`,
+    createdAt,
+    fileSize: Number(t.fileSize ?? raw.file_size ?? 0),
+    messageId: t.messageId ?? (raw.message_id as string | undefined),
+    metadata: t.metadata ?? (raw.metadata as AudioTransfer['metadata']) ?? {},
+  }
+}
+
+function isTransferForConversation(
+  transfer: AudioTransfer,
+  currentUsername: string,
+  selectedRecipient: string,
+): boolean {
+  if (!selectedRecipient) return false
+  return (
+    (transfer.sender === currentUsername && transfer.receiver === selectedRecipient) ||
+    (transfer.sender === selectedRecipient && transfer.receiver === currentUsername)
+  )
+}
+
+function isAuraMessageForConversation(
+  message: ChatMessage,
+  currentUsername: string,
+  selectedRecipient: string,
+): boolean {
+  if (!selectedRecipient) return false
+  return (
+    (message.sender === currentUsername && message.receiver === selectedRecipient) ||
+    (message.sender === selectedRecipient && message.receiver === currentUsername)
+  )
+}
+
+function normalizeAuraChatMessage(raw: Record<string, unknown>): ChatMessage {
+  const createdAt =
+    pickTimestamp(raw, ['createdAt', 'created_at']) ?? new Date().toISOString()
+  const base = { ...raw } as Record<string, unknown>
+  const segmentsUnknown = base.segments
+  const segments = Array.isArray(segmentsUnknown)
+    ? (segmentsUnknown as Record<string, unknown>[]).map((seg) => ({
+        segmentIndex: Number(seg.segmentIndex ?? seg.segment_index ?? 0),
+        totalSegments: seg.totalSegments ?? seg.total_segments,
+        audioUrl: String(seg.audioUrl ?? seg.audio_url ?? ''),
+        fileName: String(seg.fileName ?? seg.stego_file_name ?? ''),
+        carrierName: seg.carrierName ?? seg.carrier_name,
+        carrierDurationSec: seg.carrierDurationSec ?? seg.carrier_duration_sec,
+      }))
+    : undefined
+
+  const direction: ChatMessage['direction'] =
+    base.direction === 'incoming' ? 'incoming' : 'outgoing'
+  const typeRaw = base.type
+  const type: ChatMessage['type'] =
+    typeRaw === 'audio_group' ? 'audio_group' : typeRaw === 'text' ? 'text' : 'audio'
 
   return {
-    ...transfer,
-    sender: transfer.sender || fallbackSender,
-    receiver: transfer.receiver || fallbackReceiver,
+    ...(raw as unknown as ChatMessage),
+    id: String(base.id ?? ''),
     createdAt,
-    originalFilename:
-      transfer.originalFilename ||
-      ((transfer.metadata as { file_name?: string } | undefined)?.file_name) ||
-      `${transfer.messageId || transfer.id}.wav`,
-    fileSize: transfer.fileSize ?? 0,
+    sender: String(base.sender ?? ''),
+    receiver: String(base.receiver ?? ''),
+    direction,
+    type,
+    text: base.text != null ? String(base.text) : undefined,
+    audioUrl: (base.audioUrl ?? base.audio_url) as string | undefined,
+    messageId:
+      base.messageId != null
+        ? String(base.messageId)
+        : base.message_id != null
+          ? String(base.message_id)
+          : undefined,
+    transmissionId: (base.transmissionId ?? base.transmission_id) as string | undefined,
+    mode: base.mode as ChatMessage['mode'],
+    totalSegments: (base.totalSegments ?? base.total_segments) as number | undefined,
+    segments: segments as ChatMessage['segments'],
+    manifest: base.manifest as ChatMessage['manifest'],
+    metadata: (base.metadata ?? {}) as ChatMessage['metadata'],
   }
 }
 
@@ -281,6 +356,7 @@ function getAnalysisStatus(payload: AnalysisPayload): AnalysisRunStatus {
 }
 
 function App() {
+  const [liveConversation, setLiveConversation] = useState<ConversationItem[]>([])
   const [activeScreen, setActiveScreen] = useState<NavKey>('chat')
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     if (typeof window === 'undefined') return 'dark'
@@ -326,6 +402,7 @@ function App() {
         if (!cancelled) setBooting(false)
       }
     }
+    
 
     restoreSession()
 
@@ -340,6 +417,7 @@ function App() {
       setMessages([])
       setAuraMessages([])
       setTransfers([])
+      setLiveConversation([])
       setSelectedRecipient('')
       disconnectSocket()
       setConnectionState('disconnected')
@@ -384,10 +462,76 @@ function App() {
       setMessages((current) => reconcileIncomingMessage(current, normalizeMessage(message)))
     }
     const handleTransfer = (transfer: AudioTransfer) => {
-      setTransfers((current) =>
-        dedupeById(current, normalizeTransfer(transfer, transfer.sender || currentUsername, '')),
+      if (!currentUser) return
+
+      const normalized = normalizeTransfer(
+        transfer,
+        String(transfer.sender || ''),
+        String(transfer.receiver || ''),
       )
+
+      setTransfers((prev) => {
+        if (prev.some((t) => t.id === normalized.id)) return prev
+        return [...prev, normalized]
+      })
+
+      setLiveConversation((prev) => {
+        if (prev.some((item) => item.id === `file-${normalized.id}`)) return prev
+
+        return [
+          ...prev,
+          {
+            type: 'file' as const,
+            id: `file-${normalized.id}`,
+            timestamp: normalized.createdAt,
+            transfer: normalized,
+          },
+        ]
+      })
     }
+
+    const handleAuraChatMessage = (raw: unknown) => {
+      if (!currentUser || !raw || typeof raw !== 'object') return
+      const message = normalizeAuraChatMessage(raw as Record<string, unknown>)
+      if (!message.id) return
+
+      setAuraMessages((prev) => {
+        if (prev.some((m) => m.id === message.id)) return prev
+
+        const mid = message.messageId
+        if (mid) {
+          const optimisticIdx = prev.findIndex(
+            (m) =>
+              String(m.id).startsWith('temp-') &&
+              m.sender === message.sender &&
+              m.receiver === message.receiver &&
+              m.messageId === mid,
+          )
+          if (optimisticIdx !== -1) {
+            const next = [...prev]
+            next[optimisticIdx] = message
+            return next
+          }
+        }
+
+        return [...prev, message]
+      })
+
+      setLiveConversation((prev) => {
+        const rowId = `aura-${message.id}`
+        if (prev.some((item) => item.id === rowId)) return prev
+        return [
+          ...prev,
+          {
+            type: 'aura_message' as const,
+            id: rowId,
+            timestamp: message.createdAt,
+            message,
+          },
+        ]
+      })
+    }
+
     const handleError = (payload: { error?: string }) => {
       setChatError(payload.error || 'Realtime channel error.')
     }
@@ -396,6 +540,7 @@ function App() {
     onSocketEvent('disconnect', handleDisconnect)
     onSocketEvent('new_message', handleMessage)
     onSocketEvent('file_received', handleTransfer)
+    onSocketEvent('aura_chat_message', handleAuraChatMessage)
     onSocketEvent('chat_error', handleError)
 
     socket.connect()
@@ -406,6 +551,7 @@ function App() {
       offSocketEvent('disconnect', handleDisconnect)
       offSocketEvent('new_message', handleMessage)
       offSocketEvent('file_received', handleTransfer)
+      offSocketEvent('aura_chat_message', handleAuraChatMessage)
       offSocketEvent('chat_error', handleError)
       disconnectSocket()
     }
@@ -416,6 +562,8 @@ function App() {
       setMessages([])
       return
     }
+
+  
 
     const currentUsername = currentUser.username
     let cancelled = false
@@ -459,6 +607,10 @@ function App() {
     }
   }, [currentUser, selectedRecipient])
 
+  useEffect(() => {
+    setLiveConversation([])
+  }, [selectedRecipient])
+
   const conversationItems = useMemo<ConversationItem[]>(() => {
     if (!currentUser || !selectedRecipient) return []
 
@@ -480,10 +632,8 @@ function App() {
       .map((transfer) =>
         normalizeTransfer(transfer, currentUser.username, selectedRecipient),
       )
-      .filter(
-        (transfer) =>
-          (transfer.sender === currentUser.username && transfer.receiver === selectedRecipient) ||
-          (transfer.sender === selectedRecipient && transfer.receiver === currentUser.username),
+      .filter((transfer) =>
+        isTransferForConversation(transfer, currentUser.username, selectedRecipient),
       )
       .map((transfer) => ({
         type: 'file' as const,
@@ -511,6 +661,37 @@ function App() {
       return left.id.localeCompare(right.id)
     })
   }, [auraMessages, currentUser, messages, selectedRecipient, transfers])
+
+  const liveForSelectedChat = useMemo(() => {
+    if (!currentUser || !selectedRecipient) return []
+    const me = currentUser.username
+    const other = selectedRecipient
+    return liveConversation.filter((item) => {
+      if (item.type === 'file') {
+        return isTransferForConversation(item.transfer, me, other)
+      }
+      if (item.type === 'aura_message') {
+        return isAuraMessageForConversation(item.message, me, other)
+      }
+      return false
+    })
+  }, [currentUser, liveConversation, selectedRecipient])
+
+  const mergedConversationItems = useMemo(() => {
+    if (!liveForSelectedChat.length) return conversationItems
+    const byId = new Map<string, ConversationItem>()
+    for (const item of conversationItems) {
+      byId.set(item.id, item)
+    }
+    for (const item of liveForSelectedChat) {
+      byId.set(item.id, item)
+    }
+    return Array.from(byId.values()).sort((left, right) => {
+      const timeDelta = getConversationItemTime(left) - getConversationItemTime(right)
+      if (timeDelta !== 0) return timeDelta
+      return left.id.localeCompare(right.id)
+    })
+  }, [conversationItems, liveForSelectedChat])
 
   const availableAnalysisAudio = useMemo<SelectedAudio[]>(() => {
     if (!currentUser) return []
@@ -609,54 +790,115 @@ function App() {
     })
   }
 
-  async function handleUpload(file: File) {
-    if (!currentUser || !selectedRecipient) return
+ async function handleUpload(file: File) {
+  if (!currentUser || !selectedRecipient) return
 
-    setChatError('')
+  setChatError('')
 
-    try {
-      const transfer = await uploadWavFile(selectedRecipient, file)
+  // 1. Create optimistic transfer
+  const tempId = `temp-${Date.now()}`
 
-      const normalized = normalizeTransfer(
-        transfer,
-        currentUser.username,
-        selectedRecipient,
+  const optimisticTransfer: AudioTransfer = normalizeTransfer(
+    {
+      id: tempId,
+      messageId: tempId,
+      sender: currentUser.username,
+      receiver: selectedRecipient,
+      audioUrl: URL.createObjectURL(file),
+      originalFilename: file.name,
+      fileSize: file.size,
+      createdAt: new Date().toISOString(),
+      metadata: { file_name: file.name },
+    } as AudioTransfer,
+    currentUser.username,
+    selectedRecipient
+  )
+
+  // 2. Show instantly in chat
+  setTransfers((current) => [...current, optimisticTransfer])
+
+  try {
+    const transfer = await uploadWavFile(selectedRecipient, file)
+
+    const normalized = normalizeTransfer(
+      transfer,
+      currentUser.username,
+      selectedRecipient
+    )
+
+    // 3. Replace optimistic with real
+    setTransfers((current) =>
+      current.map((t) =>
+        t.id === tempId ? normalized : t
       )
+    )
+  } catch (error) {
+    // 4. Remove failed optimistic entry
+    setTransfers((current) =>
+      current.filter((t) => t.id !== tempId)
+    )
 
-      setTransfers((current) => dedupeById(current, normalized))
-    } catch (error) {
-      setChatError(error instanceof Error ? error.message : 'Upload failed for this WAV file.')
-      throw error
-    }
+    setChatError(
+      error instanceof Error ? error.message : 'Upload failed for this WAV file.'
+    )
+    throw error
+  }
+}
+async function handleAuraSendToChat(
+  payload: Omit<ChatMessage, 'id'>,
+  selected: SelectedAudio,
+) {
+  if (!currentUser || !selectedRecipient) {
+    setChatError('Choose a recipient before sending encoded audio.')
+    return
   }
 
-  async function handleAuraSendToChat(
-    payload: Omit<ChatMessage, 'id'>,
-    selected: SelectedAudio,
-  ) {
-    if (!currentUser || !selectedRecipient) {
-      setChatError('Choose a recipient before sending encoded audio.')
-      return
-    }
+  const tempId = `temp-${Date.now()}`
 
-    const messagePayload = {
+  const optimisticMessage: ChatMessage = {
+    ...payload,
+    id: tempId,
+    sender: currentUser.username,
+    receiver: selectedRecipient,
+    direction: 'outgoing',
+    createdAt: new Date().toISOString(),
+  }
+
+  // 1. Show immediately
+  setAuraMessages((current) => [...current, optimisticMessage])
+
+  try {
+    const saved = await createMessage({
       ...payload,
       sender: currentUser.username,
       receiver: selectedRecipient,
-      direction: 'outgoing' as const,
+      direction: 'outgoing',
       createdAt: new Date().toISOString(),
-    }
+    })
 
-    const saved = await createMessage(messagePayload)
-    setAuraMessages((current) => [...current, saved])
+    // 2. Replace optimistic with real
+    setAuraMessages((current) =>
+      current.map((msg) =>
+        msg.id === tempId ? saved : msg
+      )
+    )
+
     setSelectedAudio({
       ...selected,
       messageId: saved.messageId || selected.messageId,
       source: 'Chat',
     })
-    setActiveScreen('chat')
-  }
 
+    setActiveScreen('chat')
+  } catch (error) {
+    // 3. Remove if failed
+    setAuraMessages((current) =>
+      current.filter((msg) => msg.id !== tempId)
+    )
+
+    setChatError('Failed to send encoded audio.')
+  }
+}
  function resetAnalysisStateForNewTarget() {
   analysisRequestSeqRef.current += 1
   inFlightAnalysisKeyRef.current = null
@@ -870,7 +1112,7 @@ async function runAnalysis(audio: SelectedAudio, options?: { force?: boolean }) 
               users={users}
               selectedRecipient={selectedRecipient}
               onSelectRecipient={setSelectedRecipient}
-              conversationItems={conversationItems}
+              conversationItems={mergedConversationItems}
               connectionState={connectionState}
               onSendMessage={handleSendMessage}
               onUploadFile={handleUpload}

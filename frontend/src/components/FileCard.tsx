@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { BarChart3, Download, FileAudio, LoaderCircle, Paperclip, Wand2 } from 'lucide-react'
+import { Badge } from './AuraPrimitives'
 import {
   decodeAudioTransfer,
   decodeByReference,
   getAudioUrl,
-  getDownloadUrl,
   resolveUrl,
 } from '../services/api'
 import type { AudioTransfer, DecodeResult, SelectedAudio } from '../types'
@@ -12,11 +12,13 @@ import type { AudioTransfer, DecodeResult, SelectedAudio } from '../types'
 type Props = {
   transfer: AudioTransfer
   currentUsername: string
+  /** Incoming transfer received in the last few minutes */
+  showNew?: boolean
   onReveal?: (audio: SelectedAudio) => void
   onAnalyze?: (audio: SelectedAudio) => void
 }
 
-export function FileCard({ transfer, currentUsername, onReveal, onAnalyze }: Props) {
+export function FileCard({ transfer, currentUsername, showNew, onReveal, onAnalyze }: Props) {
   const [decodeState, setDecodeState] = useState<
     'idle' | 'loading' | 'success' | 'error'
   >('idle')
@@ -28,15 +30,20 @@ export function FileCard({ transfer, currentUsername, onReveal, onAnalyze }: Pro
     ? `Sent to ${transfer.receiver}`
     : `Received from ${transfer.sender}`
   const isAuraGenerated = transfer.source === 'aura'
-  const audioUrl = isAuraGenerated
-    ? resolveUrl(transfer.audioUrl)
-    : getAudioUrl(transfer.id)
+  
+  // Build the audio URL:
+  // 1. If transfer has audioUrl (from backend), use it directly via resolveUrl
+  // 2. Otherwise, fall back to getAudioUrl (for older transfers or edge cases)
+  const rawAudioUrl = transfer.audioUrl || getAudioUrl(transfer.id)
+  const audioUrl = resolveUrl(rawAudioUrl)
+  
   const downloadUrl = isAuraGenerated
     ? resolveUrl(transfer.audioUrl)
-    : getDownloadUrl(transfer.id)
+    : resolveUrl(rawAudioUrl)
+
   const selectedAudio: SelectedAudio = {
     messageId: transfer.messageId || String(transfer.id),
-    audioUrl: isAuraGenerated ? transfer.audioUrl || '' : getAudioUrl(transfer.id),
+    audioUrl: rawAudioUrl,
     fileName: transfer.originalFilename,
     source: 'Chat',
     metadata: transfer.metadata,
@@ -50,9 +57,9 @@ export function FileCard({ transfer, currentUsername, onReveal, onAnalyze }: Pro
     selectedPartFilename: transfer.originalFilename,
   }
   const transferDate = new Date(transfer.createdAt)
-  const timeLabel = Number.isNaN(transferDate.getTime())
-    ? ''
-    : transferDate.toLocaleString()
+  const timeValid = Number.isFinite(transferDate.getTime())
+  const timeLabel = timeValid ? transferDate.toLocaleTimeString() : ''
+  const dateTimeLabel = timeValid ? transferDate.toLocaleString() : ''
 
   async function handleDecode() {
     if (onReveal) {
@@ -99,11 +106,12 @@ export function FileCard({ transfer, currentUsername, onReveal, onAnalyze }: Pro
               <Paperclip size={11} />
               Stego WAV
             </span>
+            {showNew ? <Badge tone="safe">New</Badge> : null}
           </div>
 
           <div className="mt-1 text-[13px] text-aura-muted">{direction}</div>
           <div className="mt-0.5 font-mono text-[10px] text-aura-dim">
-            {timeLabel || transfer.createdAt} -{' '}
+            {dateTimeLabel || timeLabel || transfer.createdAt} ·{' '}
             {(transfer.fileSize / 1024 / 1024).toFixed(2)} MB
           </div>
         </div>

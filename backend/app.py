@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from flask import Flask
+from flask import Flask, send_from_directory
 from flask_cors import CORS
 
 from routes.auth_routes import auth_bp
@@ -9,6 +9,7 @@ from routes.file_routes import file_bp
 from services.db import init_app as init_db_app, init_db
 from sockets.socket_handlers import init_socketio, socketio
 from routes.aura_routes import aura_bp
+from services.aura_service import OUTPUT_DIR
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -28,10 +29,11 @@ def create_app() -> Flask:
     Path(app.config["UPLOAD_FOLDER"]).mkdir(parents=True, exist_ok=True)
     Path(app.instance_path).mkdir(parents=True, exist_ok=True)
 
+    dev_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
     CORS(
         app,
         supports_credentials=True,
-        resources={r"/api/*": {"origins": ["http://localhost:5173"]}},
+        resources={r"/api/*": {"origins": dev_origins}},
     )
 
     init_db_app(app)
@@ -48,6 +50,10 @@ def create_app() -> Flask:
     @app.get("/api/health")
     def healthcheck():
         return {"status": "ok"}
+
+    @app.get("/outputs/<path:filename>")
+    def outputs_file(filename: str):
+        return send_from_directory(OUTPUT_DIR, filename)
 
     return app
 

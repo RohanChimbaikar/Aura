@@ -68,9 +68,10 @@ export function resolveUrl(path = '') {
 
   // Preserve raw backend outputs contract.
   // DO NOT rewrite /outputs/* into /api/outputs/*.
-  if (path.startsWith('/outputs/')) {
-    return `${API_BASE_URL}${path}`
-  }
+if (path.startsWith('/outputs/')) {
+  // Force backend origin for static audio files
+  return `${API_BASE_URL || 'http://127.0.0.1:5000'}${path}`
+}
 
   // Fallback for other relative paths.
   return `${API_BASE_URL}${path}`
@@ -110,15 +111,24 @@ export async function getFiles(direction?: 'received' | 'sent'): Promise<AudioTr
   return response.files
 }
 
-export async function uploadWavFile(receiver: string, file: File): Promise<AudioTransfer> {
+export async function uploadWavFile(
+  receiver: string,
+  file: File,
+  customName?: string
+): Promise<AudioTransfer> {
   const formData = new FormData()
   formData.append('receiver', receiver)
   formData.append('file', file)
+
+  if (customName) {
+    formData.append('custom_name', customName)
+  }
 
   const response = await request<{ file: AudioTransfer }>('/files/upload', {
     method: 'POST',
     body: formData,
   })
+
   return response.file
 }
 
@@ -174,6 +184,8 @@ export function decodeUploads(files: File[]) {
     body: form,
   })
 }
+
+
 
 export async function getMessages() {
   const response = await request<{ messages: ChatMessage[] }>('/messages')
