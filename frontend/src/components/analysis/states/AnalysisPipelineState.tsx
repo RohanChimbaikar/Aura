@@ -2,6 +2,7 @@ import { Panel, Stat } from '../../AuraPrimitives'
 import type { AnalysisStepState, SelectedAudio } from '../types/analysis'
 import { ANALYSIS_PIPELINE_STEPS } from '../utils/constants'
 import { parseTotalParts } from '../utils/math'
+import { EyebrowLabel } from '../shared/EyebrowLabel'
 import { AnalysisPipelineStepCard } from './AnalysisPipelineStepCard'
 
 export function AnalysisPipelineState({
@@ -33,9 +34,7 @@ export function AnalysisPipelineState({
       <div className="border-b border-aura-border/8 px-5 py-4 lg:px-6">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-aura-reveal">
-              Forensic analysis running
-            </div>
+            <EyebrowLabel tone="reveal">Forensic analysis running</EyebrowLabel>
             <h2 className="mt-1 text-lg font-semibold text-aura-text">
               {activeStep.title}
             </h2>

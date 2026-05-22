@@ -1,11 +1,10 @@
 import { Panel } from '../../AuraPrimitives'
+import { EyebrowLabel } from '../shared/EyebrowLabel'
 
 export function AnalysisErrorState({ error }: { error: string }) {
   return (
     <Panel className="p-5">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-aura-danger">
-        Analysis failed
-      </div>
+      <EyebrowLabel tone="danger">Analysis failed</EyebrowLabel>
       <h2 className="mt-2 text-xl font-semibold text-aura-text">
         Analysis could not complete
       </h2>

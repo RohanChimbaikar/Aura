@@ -1,5 +1,6 @@
 import { Panel } from '../../AuraPrimitives'
 import type { AnalysisPayload, SelectedAudio } from '../types/analysis'
+import { EyebrowLabel } from '../shared/EyebrowLabel'
 
 export function AnalysisMismatchState({
   analysis,
@@ -21,9 +22,7 @@ export function AnalysisMismatchState({
 
   return (
     <Panel className="p-5">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-aura-dim/90">
-        Analysis returned
-      </div>
+      <EyebrowLabel>Analysis returned</EyebrowLabel>
       <h2 className="mt-2 text-xl font-semibold text-aura-text">
         Analysis completed, but target mapping did not align
       </h2>
@@ -34,16 +33,12 @@ export function AnalysisMismatchState({
 
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
         <div className="rounded-2xl border border-aura-border/10 bg-aura-bg/35 px-4 py-3 text-sm text-aura-muted">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-aura-dim/90">
-            Selected audio
-          </div>
+          <EyebrowLabel>Selected audio</EyebrowLabel>
           <div className="mt-2 text-aura-text">{selectedFile}</div>
         </div>
 
         <div className="rounded-2xl border border-aura-border/10 bg-aura-bg/35 px-4 py-3 text-sm text-aura-muted">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-aura-dim/90">
-            Analysis target
-          </div>
+          <EyebrowLabel>Analysis target</EyebrowLabel>
           <div className="mt-2 text-aura-text">{analysisTarget}</div>
         </div>
       </div>

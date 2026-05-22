@@ -2,6 +2,7 @@ import { Copy } from 'lucide-react'
 import { Panel, Stat } from '../../AuraPrimitives'
 import type { AnalysisPayload } from '../types/analysis'
 import { cardTitleClass, cardSubtitleClass } from '../utils/formatting'
+import { recoveryNote } from './recovery.utils'
 
 export function RecoveredMessageCard({
   analysis,
@@ -10,12 +11,7 @@ export function RecoveredMessageCard({
   analysis: AnalysisPayload
   recoveredText: string
 }) {
-  const note =
-    analysis.summary.recoveryStatus === 'partial'
-      ? 'Partial recovery. The text below may exclude missing or weak regions.'
-      : analysis.summary.recoveryStatus === 'recovered_with_corrections'
-        ? 'Recovered with correction passes. Review correction impact for repaired chunks.'
-        : ''
+  const note = recoveryNote(analysis.summary.recoveryStatus)
 
   return (
     <Panel className="p-5 lg:p-7">

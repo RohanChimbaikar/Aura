@@ -1,5 +1,6 @@
 import { Stat } from '../../AuraPrimitives'
 import type { AnalysisPayload } from '../types/analysis'
+import { EyebrowLabel } from '../shared/EyebrowLabel'
 
 export function AnalysisSummaryBanner({
   analysis,
@@ -31,9 +32,7 @@ export function AnalysisSummaryBanner({
     <div className="rounded-2xl border border-aura-reveal/14 bg-aura-reveal/8 px-4 py-3">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-aura-reveal">
-            Analysis status
-          </div>
+          <EyebrowLabel tone="reveal">Analysis status</EyebrowLabel>
           <div className="mt-1 text-sm font-semibold text-aura-text">{title}</div>
           <p className="mt-1 text-sm leading-6 text-aura-muted">{message}</p>
         </div>

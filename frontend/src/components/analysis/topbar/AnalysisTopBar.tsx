@@ -1,6 +1,7 @@
-import { ChevronDown } from 'lucide-react'
 import { Panel } from '../../AuraPrimitives'
 import type { AudioOption, SelectedAudio } from '../types/analysis'
+import { AudioSelector } from './AudioSelector'
+import { ToolbarChip } from './ToolbarChip'
 
 export function AnalysisTopBar({
   options,
@@ -24,40 +25,15 @@ export function AnalysisTopBar({
   return (
     <Panel className="p-4 lg:p-5">
       <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
-        <div>
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-aura-dim/90">
-            Input audio
-          </div>
-
-          <div className="relative">
-            <select
-              value={pickerKey}
-              onChange={(e) => onPickerChange(e.target.value)}
-              className="h-11 w-full appearance-none rounded-2xl border border-aura-border/10 bg-aura-bg/35 px-4 pr-10 text-sm text-aura-text outline-none transition-colors focus:border-aura-reveal/35"
-            >
-              {options.length === 0 ? <option value="">No audio available</option> : null}
-              {options.map((option) => (
-                <option key={option.key} value={option.key}>
-                  {option.audio.fileName} &bull; {option.audio.source}
-                </option>
-              ))}
-            </select>
-
-            <ChevronDown
-              size={16}
-              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-aura-dim"
-            />
-          </div>
-
-          <div className="mt-2 text-xs text-aura-muted">
-            {pickedAudio?.fileName || 'Select an audio message to begin'}
-          </div>
-        </div>
+        <AudioSelector
+          options={options}
+          pickerKey={pickerKey}
+          onPickerChange={onPickerChange}
+          pickedAudio={pickedAudio}
+        />
 
         <div className="flex items-center gap-2 lg:justify-end">
-          <div className="rounded-full border border-aura-border/10 bg-aura-bg/35 px-3 py-1.5 text-xs text-aura-muted">
-            Source: {sourceLabel}
-          </div>
+          <ToolbarChip label="Source" value={sourceLabel} />
 
           <button
             type="button"

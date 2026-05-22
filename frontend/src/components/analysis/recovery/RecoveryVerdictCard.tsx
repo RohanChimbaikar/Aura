@@ -1,22 +1,10 @@
 import { Badge, Panel, Stat } from '../../AuraPrimitives'
 import type { AnalysisPayload } from '../types/analysis'
 import { formatVerdict, formatNullableBool, cardTitleClass } from '../utils/formatting'
-
-function verdictTone(status: AnalysisPayload['summary']['recoveryStatus']) {
-  if (status === 'failed') return 'danger'
-  if (status === 'partial') return 'accent'
-  return 'safe'
-}
+import { verdictTone, subtleIssueMessage } from './recovery.utils'
 
 export function RecoveryVerdictCard({ analysis }: { analysis: AnalysisPayload }) {
-  const subtleIssue =
-    analysis.summary.recoveryStatus === 'partial'
-      ? 'Some segments were not fully recoverable. Review chunk evidence before trusting the full transmission.'
-      : analysis.summary.recoveryStatus === 'recovered_with_corrections'
-        ? 'Recovery required corrective passes. Confidence remains high, but repaired regions are marked below.'
-        : analysis.summary.recoveryStatus === 'failed'
-          ? 'Recovery could not be verified from the available signal evidence.'
-          : ''
+  const subtleIssue = subtleIssueMessage(analysis.summary.recoveryStatus)
 
   return (
     <Panel className="p-5 lg:p-7">

@@ -1,4 +1,6 @@
 import { Panel } from '../../AuraPrimitives'
+import { EyebrowLabel } from '../shared/EyebrowLabel'
+import { DenseKeyValue } from '../shared/DenseKeyValue'
 
 export function EmptyResolvedAnalysisState({
   status,
@@ -13,9 +15,7 @@ export function EmptyResolvedAnalysisState({
     <Panel className="p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-aura-dim/90">
-            Analysis completed
-          </div>
+          <EyebrowLabel>Analysis completed</EyebrowLabel>
           <h2 className="mt-2 text-xl font-semibold text-aura-text">
             No analysis payload was returned
           </h2>
@@ -26,12 +26,8 @@ export function EmptyResolvedAnalysisState({
         </div>
 
         <div className="rounded-2xl border border-aura-border/10 bg-aura-bg/35 px-4 py-3 text-sm text-aura-muted">
-          <div>
-            Status: <span className="font-semibold text-aura-text">{status}</span>
-          </div>
-          <div className="mt-1">
-            State: <span className="font-semibold text-aura-text">No payload</span>
-          </div>
+          <DenseKeyValue label="Status" value={status} />
+          <DenseKeyValue label="State" value="No payload" className="mt-1" />
         </div>
       </div>
 

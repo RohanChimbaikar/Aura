@@ -1,5 +1,7 @@
 import { Panel } from '../../AuraPrimitives'
 import type { AnalysisPayload } from '../types/analysis'
+import { EyebrowLabel } from '../shared/EyebrowLabel'
+import { DenseKeyValue } from '../shared/DenseKeyValue'
 
 export function TerminalAnalysisState({
   analysis,
@@ -37,9 +39,7 @@ export function TerminalAnalysisState({
     <Panel className="p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-aura-dim/90">
-            Analysis status
-          </div>
+          <EyebrowLabel>Analysis status</EyebrowLabel>
           <h2 className="mt-2 text-xl font-semibold text-aura-text">
             {titleByStatus[status] ?? status}
           </h2>
@@ -50,14 +50,10 @@ export function TerminalAnalysisState({
         </div>
 
         <div className="rounded-2xl border border-aura-border/10 bg-aura-bg/35 px-4 py-3 text-sm text-aura-muted">
-          <div>
-            Status: <span className="font-semibold text-aura-text">{status}</span>
-          </div>
-          <div className="mt-1">
-            Files: {processed} / {total}
-          </div>
+          <DenseKeyValue label="Status" value={status} />
+          <DenseKeyValue label="Files" value={`${processed} / ${total}`} className="mt-1" />
           {analysis.elapsedMs ? (
-            <div className="mt-1">Elapsed: {(analysis.elapsedMs / 1000).toFixed(1)}s</div>
+            <DenseKeyValue label="Elapsed" value={`${(analysis.elapsedMs / 1000).toFixed(1)}s`} className="mt-1" />
           ) : null}
         </div>
       </div>
@@ -70,9 +66,7 @@ export function TerminalAnalysisState({
 
       {analysis.summary?.recoveredText ? (
         <div className="mt-4 rounded-2xl border border-aura-reveal/16 bg-aura-reveal/8 p-4">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-aura-reveal">
-            Partial recovered text
-          </div>
+          <EyebrowLabel tone="reveal">Partial recovered text</EyebrowLabel>
           <p className="mt-2 text-base font-semibold leading-7 text-aura-text">
             {analysis.summary.recoveredText}
           </p>
