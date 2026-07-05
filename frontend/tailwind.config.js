@@ -25,7 +25,7 @@ export default {
       },
       backgroundImage: {
         noise:
-          "radial-gradient(circle at top left, rgba(93,87,255,0.08), transparent 30%), radial-gradient(circle at 80% 20%, rgba(114,209,199,0.05), transparent 22%), linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0))",
+          "linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0) 38%), linear-gradient(90deg, rgba(148,163,184,0.018) 1px, transparent 1px), linear-gradient(180deg, rgba(148,163,184,0.014) 1px, transparent 1px)",
       },
       boxShadow: {
         none: 'none',

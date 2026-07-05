@@ -14,6 +14,8 @@ import wave
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from services.db import get_db
 
 
@@ -37,8 +39,8 @@ APPROVED_SAFE_CARRIERS = [
     "carrier_05_10min.wav",
 ]
 
-HEADER_BYTES = 2
-HEADER_NIBBLES = 4
+HEADER_BYTES = 24
+HEADER_NIBBLES = 48
 MAX_REUSABLE_SEGMENTS = 8
 MAX_TOTAL_TRANSMISSION_MINUTES = 90.0
 
@@ -53,9 +55,9 @@ TERMINAL_ANALYSIS_STATUSES = {
     "not_found",
     "cancelled",
 }
-SINGLE_ANALYSIS_TIMEOUT_SECONDS = 30.0
-GROUPED_ANALYSIS_TIMEOUT_SECONDS = 60.0
-COMPARE_ARTIFACT_TIMEOUT_SECONDS = 12.0
+SINGLE_ANALYSIS_TIMEOUT_SECONDS = 90.0
+GROUPED_ANALYSIS_TIMEOUT_SECONDS = 180.0
+COMPARE_ARTIFACT_TIMEOUT_SECONDS = 24.0
 
 
 def is_terminal_status(status: str | None) -> bool:
@@ -115,6 +117,85 @@ def read_mono_samples(wav_path: Path, max_samples: int = 16000 * 60) -> tuple[li
     return mono, sample_rate
 
 
+def read_all_mono_samples(wav_path: Path) -> tuple[np.ndarray, int]:
+    with wave.open(str(wav_path), "rb") as wf:
+        channels = wf.getnchannels()
+        sample_width = wf.getsampwidth()
+        sample_rate = wf.getframerate()
+        frames = wf.getnframes()
+        raw = wf.readframes(frames)
+
+    if sample_width != 2:
+        try:
+            import torchaudio
+            wav, sr = torchaudio.load(str(wav_path))
+            if wav.size(0) > 1:
+                wav = wav.mean(dim=0)
+            else:
+                wav = wav.squeeze(0)
+            return wav.numpy(), sr
+        except Exception:
+            return np.zeros(0, dtype=np.float32), sample_rate
+
+    values = struct.unpack("<" + "h" * (len(raw) // 2), raw)
+    if channels > 1:
+        mono = [
+            sum(values[index : index + channels]) / channels / 32768.0
+            for index in range(0, len(values), channels)
+        ]
+    else:
+        mono = [value / 32768.0 for value in values]
+    return np.array(mono, dtype=np.float32), sample_rate
+
+
+def apply_dsp_simulation(
+    input_path: Path,
+    output_path: Path,
+    noise_level: float,
+    clipping_level: float,
+    transcode_type: str,
+) -> None:
+    samples, sample_rate = read_all_mono_samples(input_path)
+    if len(samples) == 0:
+        import shutil
+        shutil.copy(str(input_path), str(output_path))
+        return
+
+    # 1. Additive Gaussian noise
+    if noise_level > 0:
+        std = (noise_level / 100.0) * 0.15
+        noise = np.random.normal(0, std, size=samples.shape).astype(np.float32)
+        samples = samples + noise
+
+    # 2. Clipping saturation
+    if clipping_level < 100:
+        threshold = 0.05 + (clipping_level / 100.0) * 0.95
+        samples = np.clip(samples, -threshold, threshold)
+        samples = samples / threshold * 0.95
+
+    # 3. Transcoding Simulation (FFT-based Low-Pass Filter + 12-bit quantization)
+    if transcode_type in ("MP3", "Opus"):
+        cutoff_hz = 12000.0 if transcode_type == "Opus" else 16000.0
+        n_samples = len(samples)
+        if n_samples > 1:
+            fft_vals = np.fft.rfft(samples)
+            freqs = np.fft.rfftfreq(n_samples, d=1.0 / sample_rate)
+            fft_vals[freqs > cutoff_hz] = 0.0
+            samples = np.fft.irfft(fft_vals, n=n_samples).astype(np.float32)
+        
+        # 12-bit quantization
+        samples = np.round(samples * 2048.0) / 2048.0
+
+    # Save as 16-bit PCM WAV
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    scaled = np.clip(samples * 32767.0, -32768.0, 32767.0).astype(np.int16)
+    with wave.open(str(output_path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(scaled.tobytes())
+
+
 def downsample_series(samples: list[float], points: int = 256) -> list[float]:
     if not samples:
         return []
@@ -133,29 +214,112 @@ def downsample_series(samples: list[float], points: int = 256) -> list[float]:
     return output
 
 
-def build_spectrogram(samples: list[float], time_bins: int = 64, freq_bins: int = 24) -> dict[str, Any]:
+def build_spectrogram(
+    samples: list[float],
+    time_bins: int = 160,
+    freq_bins: int = 96,
+    sample_rate: int = 16000,
+    n_fft: int = 1024,
+) -> dict[str, Any]:
+    """
+    Build a real STFT-style magnitude spectrogram.
+
+    Values are frequency rows from low to high, each containing time-bin columns.
+    Intensities are log-magnitude normalized over an 80 dB window.
+    """
     if not samples:
-        return {"timeBins": time_bins, "freqBins": freq_bins, "values": []}
-    window = max(64, len(samples) // time_bins)
-    values: list[list[float]] = []
-    for bin_index in range(time_bins):
-        start = bin_index * window
-        chunk = samples[start : start + window]
-        if len(chunk) < 8:
-            chunk = samples[-window:]
-        row = []
-        for freq_index in range(freq_bins):
-            cycles = freq_index + 1
-            real = 0.0
-            imag = 0.0
-            for index, sample in enumerate(chunk):
-                angle = 2.0 * math.pi * cycles * index / max(1, len(chunk))
-                real += sample * math.cos(angle)
-                imag -= sample * math.sin(angle)
-            magnitude = math.sqrt(real * real + imag * imag) / max(1, len(chunk))
-            row.append(round(min(1.0, magnitude * 12.0), 4))
-        values.append(row)
-    return {"timeBins": time_bins, "freqBins": freq_bins, "values": values}
+        return {
+            "timeBins": time_bins,
+            "freqBins": freq_bins,
+            "sampleRate": sample_rate,
+            "minFrequencyHz": 0,
+            "maxFrequencyHz": sample_rate / 2,
+            "values": [],
+        }
+
+    signal = np.asarray(samples, dtype=np.float32)
+    if signal.size < 8:
+        return {
+            "timeBins": time_bins,
+            "freqBins": freq_bins,
+            "sampleRate": sample_rate,
+            "minFrequencyHz": 0,
+            "maxFrequencyHz": sample_rate / 2,
+            "values": [],
+        }
+
+    fft_size = int(max(128, min(n_fft, 4096)))
+    window_size = int(min(fft_size, max(128, signal.size)))
+    if window_size < fft_size:
+        fft_size = window_size
+
+    hop = max(1, int((signal.size - window_size) / max(1, time_bins - 1)))
+    starts = [min(index * hop, max(0, signal.size - window_size)) for index in range(time_bins)]
+    window = np.hanning(window_size).astype(np.float32)
+    spectra: list[np.ndarray] = []
+
+    for start in starts:
+        frame = signal[start : start + window_size]
+        if frame.size < window_size:
+            frame = np.pad(frame, (0, window_size - frame.size))
+        spectrum = np.abs(np.fft.rfft(frame * window, n=fft_size))
+        spectra.append(spectrum)
+
+    matrix = np.stack(spectra, axis=1)
+    matrix = np.maximum(matrix, 1e-10)
+    db = 20.0 * np.log10(matrix / np.max(matrix))
+    normalized = np.clip((db + 80.0) / 80.0, 0.0, 1.0)
+
+    source_freqs = np.linspace(0, sample_rate / 2, normalized.shape[0])
+    target_freqs = np.linspace(0, sample_rate / 2, freq_bins)
+    sampled = np.vstack(
+        [np.interp(target_freqs, source_freqs, normalized[:, col]) for col in range(normalized.shape[1])]
+    ).T
+
+    return {
+        "timeBins": int(time_bins),
+        "freqBins": int(freq_bins),
+        "sampleRate": int(sample_rate),
+        "minFrequencyHz": 0,
+        "maxFrequencyHz": int(sample_rate / 2),
+        "values": [[round(float(value), 4) for value in row] for row in sampled],
+    }
+
+
+def build_frequency_delta(
+    cover_spectrogram: dict[str, Any],
+    stego_spectrogram: dict[str, Any],
+    residual_spectrogram: dict[str, Any],
+) -> list[dict[str, float]]:
+    cover = np.asarray(cover_spectrogram.get("values") or [], dtype=np.float32)
+    stego = np.asarray(stego_spectrogram.get("values") or [], dtype=np.float32)
+    residual = np.asarray(residual_spectrogram.get("values") or [], dtype=np.float32)
+    if cover.size == 0 or stego.size == 0:
+        return []
+
+    rows = min(cover.shape[0], stego.shape[0])
+    cover = cover[:rows]
+    stego = stego[:rows]
+    residual = residual[:rows] if residual.size else np.zeros_like(cover)
+    max_freq = float(stego_spectrogram.get("maxFrequencyHz") or 8000.0)
+    denominator = max(1, rows - 1)
+    result: list[dict[str, float]] = []
+
+    for row_index in range(rows):
+        cover_energy = float(np.mean(cover[row_index]))
+        stego_energy = float(np.mean(stego[row_index]))
+        residual_energy = float(np.mean(residual[row_index])) if residual.size else abs(stego_energy - cover_energy)
+        result.append(
+            {
+                "frequencyHz": round(max_freq * row_index / denominator, 2),
+                "cover": round(cover_energy, 4),
+                "stego": round(stego_energy, 4),
+                "delta": round(stego_energy - cover_energy, 4),
+                "residual": round(residual_energy, 4),
+            }
+        )
+
+    return result
 
 
 def signal_data_for_audio(wav_path: Path | None) -> dict[str, Any]:
@@ -165,12 +329,12 @@ def signal_data_for_audio(wav_path: Path | None) -> dict[str, Any]:
             "spectrogram": {"timeBins": 64, "freqBins": 24, "values": []},
             "differenceWaveform": [],
         }
-    samples, _sample_rate = read_mono_samples(wav_path)
+    samples, sample_rate = read_mono_samples(wav_path)
     waveform = downsample_series(samples, 320)
     energy = downsample_series([abs(sample) for sample in samples], 320)
     return {
         "waveform": waveform,
-        "spectrogram": build_spectrogram(samples, 64, 24),
+        "spectrogram": build_spectrogram(samples, 160, 96, sample_rate=sample_rate),
         "differenceWaveform": energy,
     }
 
@@ -338,19 +502,22 @@ def save_generation_provenance(
     }
 
 
-def capacity_for_text(text: str) -> dict[str, Any]:
-    plan = build_encode_transmission_plan(text)
+def capacity_for_text(text: str, ecc_scheme: int = 0, use_parity: bool = False) -> dict[str, Any]:
+    plan = build_encode_transmission_plan(text, ecc_scheme=ecc_scheme, use_parity=use_parity)
     first_segment = plan["segments"][0] if plan["segments"] else None
     carrier_name = first_segment["carrierName"] if first_segment else ""
     carrier_path = CARRIER_DIR / carrier_name if carrier_name else None
+    cfg = load_cfg()
+    repeat_factor = int(cfg["repeat_factor"])
+    header_chunks = 12 + 48 * repeat_factor + 12
     return {
         "success": True,
         "message_length": plan["messageChars"],
         "header_bytes": HEADER_BYTES,
         "header_nibbles": HEADER_NIBBLES,
-        "header_chunks": None,
+        "header_chunks": header_chunks,
         "payload_nibbles": plan["messageBytes"] * 2,
-        "payload_chunks": None,
+        "payload_chunks": plan["requiredChunks"] - header_chunks,
         "required_chunks": plan["requiredChunks"],
         "required_seconds": plan["requiredSeconds"],
         "required_minutes": plan["requiredMinutes"],
@@ -391,12 +558,12 @@ def normalize_ascii_text(text: str) -> str:
     return "".join(chr(ord(ch) & 0x7F) for ch in text)
 
 
-def load_approved_carriers() -> list[dict[str, Any]]:
+def load_approved_carriers(ecc_scheme: int = 0) -> list[dict[str, Any]]:
     cfg = load_cfg()
     repeat_factor = int(cfg["repeat_factor"])
-    chunks_per_char = int(cfg["chunks_per_char_protected"])
+    chunks_per_char = (4 if ecc_scheme == 1 else 2) * repeat_factor
     chunk_seconds = float(cfg["chunk_seconds"])
-    header_chunks = HEADER_NIBBLES * repeat_factor
+    header_chunks = 12 + 48 * repeat_factor + 12
 
     carriers: list[dict[str, Any]] = []
     for name in APPROVED_SAFE_CARRIERS:
@@ -420,61 +587,64 @@ def load_approved_carriers() -> list[dict[str, Any]]:
     return carriers
 
 
-def build_encode_transmission_plan(text: str) -> dict[str, Any]:
+def build_encode_transmission_plan(text: str, ecc_scheme: int = 0, use_parity: bool = False) -> dict[str, Any]:
     normalized = normalize_ascii_text(text or "")
     message_bytes = normalized.encode("latin-1")
     cfg = load_cfg()
-    carriers = load_approved_carriers()
-    chunks_per_char = int(cfg["chunks_per_char_protected"])
+    carriers = load_approved_carriers(ecc_scheme=ecc_scheme)
+    repeat_factor = int(cfg["repeat_factor"])
+    chunks_per_char = (4 if ecc_scheme == 1 else 2) * repeat_factor
     chunk_seconds = float(cfg["chunk_seconds"])
-    header_chunks = HEADER_NIBBLES * int(cfg["repeat_factor"])
+    header_chunks = 12 + 48 * repeat_factor + 12
     message_chars = len(normalized)
     message_byte_count = len(message_bytes)
 
-    smallest_single = next(
-        (carrier for carrier in carriers if message_byte_count <= carrier["usable_payload_bytes"]),
-        None,
-    )
-    if smallest_single is not None:
-        required_chunks = header_chunks + (message_byte_count * chunks_per_char)
-        required_seconds = required_chunks * chunk_seconds
-        segment = {
-            "segmentIndex": 0,
-            "carrierId": smallest_single["carrier_id"],
-            "carrierName": smallest_single["carrier_name"],
-            "carrierDurationSec": smallest_single["carrier_duration_sec"],
-            "carrierDurationMin": round(smallest_single["carrier_duration_sec"] / 60.0, 2),
-            "usablePayloadBytes": smallest_single["usable_payload_bytes"],
-            "assignedPayloadBytes": message_byte_count,
-            "estimatedChunks": required_chunks,
-            "estimatedSeconds": round(required_seconds, 2),
-        }
-        return {
-            "mode": "single",
-            "carrierReuseEnabled": False,
-            "messageChars": message_chars,
-            "messageBytes": message_byte_count,
-            "requiredChunks": required_chunks,
-            "requiredSeconds": round(required_seconds, 2),
-            "requiredMinutes": round(required_seconds / 60.0, 2),
-            "singleCarrierCandidate": {
+    if not use_parity:
+        smallest_single = next(
+            (carrier for carrier in carriers if message_byte_count <= carrier["usable_payload_bytes"]),
+            None,
+        )
+        if smallest_single is not None:
+            required_chunks = header_chunks + (message_byte_count * chunks_per_char)
+            required_seconds = required_chunks * chunk_seconds
+            segment = {
+                "segmentIndex": 0,
                 "carrierId": smallest_single["carrier_id"],
                 "carrierName": smallest_single["carrier_name"],
                 "carrierDurationSec": smallest_single["carrier_duration_sec"],
                 "carrierDurationMin": round(smallest_single["carrier_duration_sec"] / 60.0, 2),
                 "usablePayloadBytes": smallest_single["usable_payload_bytes"],
-            },
-            "segments": [segment],
-            "uniqueCarriersUsed": 1,
-            "reusedCarrierCount": 0,
-            "totalSegments": 1,
-            "totalAssignedPayloadBytes": message_byte_count,
-            "totalAvailablePayloadBytes": smallest_single["usable_payload_bytes"],
-            "totalDurationSec": smallest_single["carrier_duration_sec"],
-            "totalDurationMin": round(smallest_single["carrier_duration_sec"] / 60.0, 2),
-            "poolExceeded": False,
-        }
+                "assignedPayloadBytes": message_byte_count,
+                "estimatedChunks": required_chunks,
+                "estimatedSeconds": round(required_seconds, 2),
+            }
+            return {
+                "mode": "single",
+                "carrierReuseEnabled": False,
+                "messageChars": message_chars,
+                "messageBytes": message_byte_count,
+                "requiredChunks": required_chunks,
+                "requiredSeconds": round(required_seconds, 2),
+                "requiredMinutes": round(required_seconds / 60.0, 2),
+                "singleCarrierCandidate": {
+                    "carrierId": smallest_single["carrier_id"],
+                    "carrierName": smallest_single["carrier_name"],
+                    "carrierDurationSec": smallest_single["carrier_duration_sec"],
+                    "carrierDurationMin": round(smallest_single["carrier_duration_sec"] / 60.0, 2),
+                    "usablePayloadBytes": smallest_single["usable_payload_bytes"],
+                },
+                "segments": [segment],
+                "uniqueCarriersUsed": 1,
+                "reusedCarrierCount": 0,
+                "totalSegments": 1,
+                "totalAssignedPayloadBytes": message_byte_count,
+                "totalAvailablePayloadBytes": smallest_single["usable_payload_bytes"],
+                "totalDurationSec": smallest_single["carrier_duration_sec"],
+                "totalDurationMin": round(smallest_single["carrier_duration_sec"] / 60.0, 2),
+                "poolExceeded": False,
+            }
 
+    max_text_segments = (MAX_REUSABLE_SEGMENTS - 1) if use_parity else MAX_REUSABLE_SEGMENTS
     carriers_desc = sorted(
         (carrier for carrier in carriers if int(carrier["usable_payload_bytes"]) > 0),
         key=lambda carrier: (-int(carrier["usable_payload_bytes"]), str(carrier["carrier_name"])),
@@ -493,7 +663,7 @@ def build_encode_transmission_plan(text: str) -> dict[str, Any]:
     hit_duration_cap = False
 
     while remaining > 0:
-        if len(segments) >= MAX_REUSABLE_SEGMENTS:
+        if len(segments) >= max_text_segments:
             hit_segment_cap = True
             break
 
@@ -518,6 +688,7 @@ def build_encode_transmission_plan(text: str) -> dict[str, Any]:
                 "assignedPayloadBytes": assign,
                 "estimatedChunks": segment_chunks,
                 "estimatedSeconds": round(segment_seconds, 2),
+                "isParity": False,
             }
         )
         remaining -= assign
@@ -526,9 +697,41 @@ def build_encode_transmission_plan(text: str) -> dict[str, Any]:
         required_seconds = projected_seconds
         available_payload += carrier["usable_payload_bytes"]
 
+    if use_parity and remaining == 0 and len(segments) > 0:
+        max_assign = max(seg["assignedPayloadBytes"] for seg in segments)
+        parity_chunks = header_chunks + (max_assign * chunks_per_char)
+        parity_seconds = parity_chunks * chunk_seconds
+        projected_seconds = required_seconds + parity_seconds
+        if (projected_seconds / 60.0) > MAX_TOTAL_TRANSMISSION_MINUTES + 1e-9:
+            hit_duration_cap = True
+        else:
+            try:
+                parity_carrier_path, parity_carrier_duration = select_safe_carrier(parity_seconds)
+                carrier_name = parity_carrier_path.name
+                carrier_info = next(c for c in carriers if c["carrier_name"] == carrier_name)
+                segments.append(
+                    {
+                        "segmentIndex": len(segments),
+                        "carrierId": carrier_info["carrier_id"],
+                        "carrierName": carrier_info["carrier_name"],
+                        "carrierDurationSec": carrier_info["carrier_duration_sec"],
+                        "carrierDurationMin": round(carrier_info["carrier_duration_sec"] / 60.0, 2),
+                        "usablePayloadBytes": carrier_info["usable_payload_bytes"],
+                        "assignedPayloadBytes": max_assign,
+                        "estimatedChunks": parity_chunks,
+                        "estimatedSeconds": round(parity_seconds, 2),
+                        "isParity": True,
+                    }
+                )
+                required_chunks += parity_chunks
+                required_seconds = projected_seconds
+                available_payload += carrier_info["usable_payload_bytes"]
+            except Exception:
+                hit_duration_cap = True
+
     unique_carriers_used = len({segment["carrierId"] for segment in segments})
     reused_carrier_count = len(segments) - unique_carriers_used
-    if remaining == 0:
+    if remaining == 0 and not hit_segment_cap and not hit_duration_cap:
         return {
             "mode": "multi",
             "carrierReuseEnabled": True,
@@ -571,7 +774,17 @@ def build_encode_transmission_plan(text: str) -> dict[str, Any]:
     }
 
 
-def run_sender_with_cover(text: str, out_path: Path, cover_path: Path) -> str:
+def run_sender_with_cover(
+    out_path: Path,
+    cover_path: Path,
+    text: str | None = None,
+    payload_hex: str | None = None,
+    transmission_id: int = 0,
+    part_index: int = 0,
+    total_parts: int = 1,
+    ecc_scheme: int = 0,
+    codec_hint: int = 0,
+) -> str:
     command = [
         sys.executable,
         str(SENDER_SCRIPT),
@@ -579,11 +792,26 @@ def run_sender_with_cover(text: str, out_path: Path, cover_path: Path) -> str:
         str(CONFIG_FILE),
         "--cover",
         str(cover_path),
-        "--text",
-        text,
         "--out",
         str(out_path),
+        "--transmission-id",
+        str(transmission_id),
+        "--part-index",
+        str(part_index),
+        "--total-parts",
+        str(total_parts),
+        "--ecc-scheme",
+        str(ecc_scheme),
+        "--codec-hint",
+        str(codec_hint),
     ]
+    if payload_hex is not None:
+        command.extend(["--payload-hex", payload_hex])
+    elif text is not None:
+        command.extend(["--text", text])
+    else:
+        raise ValueError("Either text or payload_hex must be provided")
+
     completed = subprocess.run(
         command,
         cwd=str(MODEL_DIR),
@@ -614,9 +842,9 @@ def parse_transmission_filename(name: str) -> dict[str, Any] | None:
     }
 
 
-def encode_text(text: str) -> dict[str, Any]:
+def encode_text(text: str, ecc_scheme: int = 0, use_parity: bool = False) -> dict[str, Any]:
     ensure_dirs()
-    plan = build_encode_transmission_plan(text)
+    plan = build_encode_transmission_plan(text, ecc_scheme=ecc_scheme, use_parity=use_parity)
     if plan["mode"] == "exceeded":
         raise RuntimeError("This message exceeds Aura's current safe transmission limit.")
     normalized = normalize_ascii_text(text)
@@ -629,7 +857,16 @@ def encode_text(text: str) -> dict[str, Any]:
         file_name = f"{message_id}.wav"
         out_path = OUTPUT_DIR / file_name
         cover_path = CARRIER_DIR / segment["carrierName"]
-        sender_stdout = run_sender_with_cover(normalized, out_path, cover_path)
+        sender_stdout = run_sender_with_cover(
+            out_path=out_path,
+            cover_path=cover_path,
+            text=normalized,
+            transmission_id=0,
+            part_index=0,
+            total_parts=1,
+            ecc_scheme=ecc_scheme,
+            codec_hint=0,
+        )
         sender_stdout_log.append(sender_stdout)
         cfg = load_cfg()
         provenance = save_generation_provenance(
@@ -646,7 +883,7 @@ def encode_text(text: str) -> dict[str, Any]:
             grouped=False,
         )
         result = {
-            **capacity_for_text(text),
+            **capacity_for_text(text, ecc_scheme=ecc_scheme, use_parity=use_parity),
             "success": True,
             "mode": "single",
             "message_id": message_id,
@@ -683,7 +920,8 @@ def encode_text(text: str) -> dict[str, Any]:
         save_encode_record(message_id, result)
         return result
 
-    transmission_id = f"{secrets.randbits(64):016x}"
+    transmission_id_int = secrets.randbits(32)
+    transmission_id = f"{transmission_id_int:08x}"
     cfg = load_cfg()
     db = get_db()
     db.execute(
@@ -695,18 +933,66 @@ def encode_text(text: str) -> dict[str, Any]:
     )
     db.commit()
 
-    segments: list[dict[str, Any]] = []
+    text_payloads = []
+    text_segments_info = [seg for seg in plan["segments"] if not seg.get("isParity")]
     offset = 0
-    for idx, planned in enumerate(plan["segments"]):
+    for idx, planned in enumerate(text_segments_info):
         assigned = int(planned["assignedPayloadBytes"])
         payload = message_bytes[offset : offset + assigned]
         offset += assigned
+        text_payloads.append(payload)
+
+    parity_payload = None
+    if use_parity:
+        max_len = max(len(p) for p in text_payloads)
+        padded_payloads = [p.ljust(max_len, b"\x00") for p in text_payloads]
+        xor_bytes = bytearray(max_len)
+        for i in range(max_len):
+            val = 0
+            for p in padded_payloads:
+                val ^= p[i]
+            xor_bytes[i] = val
+        parity_payload = bytes(xor_bytes)
+
+    segments: list[dict[str, Any]] = []
+    for idx, planned in enumerate(plan["segments"]):
+        is_parity_seg = planned.get("isParity", False)
         part = idx + 1
         total = len(plan["segments"])
         file_name = f"tx_{transmission_id}_part_{part:02d}_of_{total:02d}.wav"
         out_path = OUTPUT_DIR / file_name
         cover_path = CARRIER_DIR / planned["carrierName"]
-        sender_stdout = run_sender_with_cover(payload.decode("latin-1"), out_path, cover_path)
+
+        if is_parity_seg:
+            codec_hint = 255
+            sender_stdout = run_sender_with_cover(
+                out_path=out_path,
+                cover_path=cover_path,
+                payload_hex=parity_payload.hex(),
+                transmission_id=transmission_id_int,
+                part_index=idx,
+                total_parts=total,
+                ecc_scheme=ecc_scheme,
+                codec_hint=codec_hint,
+            )
+            payload_len = len(parity_payload)
+            payload_bits = payload_len * 8
+        else:
+            codec_hint = 0
+            payload = text_payloads[idx]
+            sender_stdout = run_sender_with_cover(
+                out_path=out_path,
+                cover_path=cover_path,
+                text=payload.decode("latin-1"),
+                transmission_id=transmission_id_int,
+                part_index=idx,
+                total_parts=total,
+                ecc_scheme=ecc_scheme,
+                codec_hint=codec_hint,
+            )
+            payload_len = len(payload)
+            payload_bits = payload_len * 8
+
         sender_stdout_log.append(sender_stdout)
         provenance = save_generation_provenance(
             cover_path=cover_path,
@@ -714,8 +1000,8 @@ def encode_text(text: str) -> dict[str, Any]:
             transmission_id=transmission_id,
             part_number=part,
             total_parts=total,
-            payload_chars=len(payload.decode("latin-1")),
-            payload_bits=len(payload) * 8,
+            payload_chars=payload_len,
+            payload_bits=payload_bits,
             chunk_count=planned["estimatedChunks"],
             chunk_seconds=float(cfg["chunk_seconds"]),
             parent_message_id=f"tx_{transmission_id}",
@@ -727,9 +1013,10 @@ def encode_text(text: str) -> dict[str, Any]:
                 "carrier_id": planned["carrierId"],
                 "carrier_name": planned["carrierName"],
                 "carrier_duration_sec": planned["carrierDurationSec"],
-                "payload_bytes": assigned,
+                "payload_bytes": payload_len,
                 "stego_file_name": file_name,
                 "audio_url": f"/outputs/{file_name}",
+                "is_parity": is_parity_seg,
                 **provenance,
             }
         )
@@ -750,7 +1037,7 @@ def encode_text(text: str) -> dict[str, Any]:
     first_file = segments[0]["stego_file_name"]
     message_id = f"tx_{transmission_id}"
     result = {
-        **capacity_for_text(text),
+        **capacity_for_text(text, ecc_scheme=ecc_scheme, use_parity=use_parity),
         "success": True,
         "mode": "multi",
         "transmission_id": transmission_id,
@@ -786,7 +1073,7 @@ def encode_text(text: str) -> dict[str, Any]:
     return result
 
 
-def decode_audio_path(path: Path, message_id: str | None = None, timeout_seconds: float = 300) -> dict[str, Any]:
+def decode_audio_path(path: Path, message_id: str | None = None, timeout_seconds: float = 300, persist: bool = True) -> dict[str, Any]:
     ensure_dirs()
     cfg = load_cfg()
     if message_id is None:
@@ -839,8 +1126,20 @@ def decode_audio_path(path: Path, message_id: str | None = None, timeout_seconds
             parsed.get("changes", []),
         ),
         "receiver_stdout": completed.stdout,
+        "transmission_id": parsed.get("transmission_id"),
+        "part_index": parsed.get("part_index"),
+        "total_parts": parsed.get("total_parts"),
+        "ecc_scheme": parsed.get("ecc_scheme"),
+        "codec_hint": parsed.get("codec_hint"),
+        "payload_crc_ok": parsed.get("payload_crc_ok"),
+        "uncorrectable_count": parsed.get("uncorrectable_count"),
+        "corrected_bits": parsed.get("corrected_bits"),
+        "sync_lock": parsed.get("sync_lock"),
+        "sync_ber": parsed.get("sync_ber"),
+        "payload_hex": parsed.get("payload_hex"),
     }
-    save_decode_record(message_id, result)
+    if persist:
+        save_decode_record(message_id, result)
     return result
 
 
@@ -852,6 +1151,14 @@ def parse_receiver_stdout(output: str) -> dict[str, Any]:
     def int_after(label: str) -> int | None:
         match = re.search(rf"{re.escape(label)}\s*:\s*(\d+)", output)
         return int(match.group(1)) if match else None
+
+    def float_after(label: str) -> float | None:
+        match = re.search(rf"{re.escape(label)}\s*:\s*([0-9.]+)", output)
+        return float(match.group(1)) if match else None
+
+    def string_after(label: str) -> str | None:
+        match = re.search(rf"{re.escape(label)}\s*:\s*([^\r\n]+)", output)
+        return match.group(1).strip() if match else None
 
     raw_text = block_between(output, "RAW DECODED TEXT:", "-" * 20)
     corrected_text = block_between(output, "CORRECTED TEXT:", "-" * 20)
@@ -876,6 +1183,17 @@ def parse_receiver_stdout(output: str) -> dict[str, Any]:
         "payload_chunks_needed": int_after("Payload chunks needed"),
         "total_needed_chunks": int_after("Total needed chunks"),
         "ignored_tail_chunks": int_after("Ignored tail chunks"),
+        "transmission_id": int_after("Transmission ID"),
+        "part_index": int_after("Part Index"),
+        "total_parts": int_after("Total Parts"),
+        "ecc_scheme": int_after("ECC Scheme"),
+        "codec_hint": int_after("Codec Hint"),
+        "payload_crc_ok": string_after("Payload CRC OK") == "Pass",
+        "uncorrectable_count": int_after("Uncorrectable Count"),
+        "corrected_bits": int_after("Corrected Bits"),
+        "sync_lock": string_after("Sync Lock"),
+        "sync_ber": float_after("Sync BER"),
+        "payload_hex": string_after("Payload Hex"),
         "raw_text": raw_text.strip(),
         "corrected_text": corrected_text.strip(),
         "changes": changes,
@@ -982,10 +1300,15 @@ def recover_grouped_transmission(
     persist: bool = True,
     per_file_timeout_seconds: float = 300,
 ) -> dict[str, Any]:
+    cfg = load_cfg()
     if not paths:
         raise RuntimeError("No audio files provided for grouped recovery.")
     if len(paths) == 1:
-        return decode_audio_path(paths[0], message_id=paths[0].stem, timeout_seconds=per_file_timeout_seconds)
+        # Wait, if it has 1 path, we still want to recover grouped if it was originally grouped.
+        # So we parse transmission details to see if total_parts > 1.
+        parsed_single = parse_transmission_filename(paths[0].name)
+        if parsed_single is None or parsed_single["total_segments"] <= 1:
+            return decode_audio_path(paths[0], message_id=paths[0].stem, timeout_seconds=per_file_timeout_seconds, persist=persist)
 
     parsed_files: list[tuple[Path, str, int, int]] = []
     for path in paths:
@@ -1041,22 +1364,10 @@ def recover_grouped_transmission(
             "error": f"Duplicate Part {dup} detected.",
             "recovered_text": None,
         }
-    missing = [idx for idx in range(total_segments) if idx not in by_index]
-    if missing:
-        return {
-            "success": False,
-            "mode": "multi",
-            "transmission_id": resolved_tx_id,
-            "total_segments": total_segments,
-            "received_segments": len(by_index),
-            "missing_segments": [idx + 1 for idx in missing],
-            "recovery_status": "incomplete",
-            "error": f"Missing segment(s): {len(by_index)} of {total_segments}",
-            "recovered_text": None,
-        }
 
-    ordered_segments: list[dict[str, Any]] = []
-    recovered_parts: list[str] = []
+    missing = [idx for idx in range(total_segments) if idx not in by_index]
+    
+    decoded_parts: dict[int, dict[str, Any]] = {}
     failed_segments: list[int] = []
     combined_changes: list[dict[str, Any]] = []
     total_chunks = 0
@@ -1064,55 +1375,174 @@ def recover_grouped_transmission(
     ignored_tail_chunks = 0
     header_valid = True
 
-    for idx in range(total_segments):
-        path = by_index[idx]
+    manifest_path = OUTPUT_DIR / f"tx_{resolved_tx_id}_manifest.json"
+    manifest_data = None
+    if manifest_path.exists():
+        try:
+            manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    for idx, path in by_index.items():
         try:
             decoded = decode_audio_path(
                 path,
                 message_id=f"tx_{resolved_tx_id}_part_{idx+1:02d}",
                 timeout_seconds=per_file_timeout_seconds,
+                persist=persist,
             )
-            part_text = decoded.get("corrected_text") or decoded.get("raw_text") or ""
-            recovered_parts.append(part_text)
+            decoded_parts[idx] = decoded
             combined_changes.extend(decoded.get("changes", []))
             total_chunks += int(decoded.get("total_chunks") or 0)
             payload_chunks_needed += int(decoded.get("payload_chunks_needed") or 0)
             ignored_tail_chunks += int(decoded.get("ignored_tail_chunks") or 0)
             header_valid = header_valid and bool(decoded.get("header_valid", True))
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            failed_segments.append(idx)
+
+    # Check for parity packet presence
+    has_parity = False
+    parity_idx = None
+    for idx, dec in decoded_parts.items():
+        if dec.get("codec_hint") == 255:
+            has_parity = True
+            parity_idx = idx
+            break
+
+    if not has_parity and manifest_data:
+        segs = manifest_data.get("segments") or []
+        for s_idx, seg in enumerate(segs):
+            if bool(seg.get("is_parity") or seg.get("isParity")):
+                has_parity = True
+                parity_idx = s_idx
+                break
+
+    reconstructed_idx = None
+    if len(missing) == 1 and not failed_segments and has_parity:
+        m = missing[0]
+        payloads = []
+        for idx, dec in decoded_parts.items():
+            p_hex = dec.get("payload_hex") or ""
+            if p_hex:
+                payloads.append(bytes.fromhex(p_hex))
+
+        if payloads:
+            max_len = max(len(p) for p in payloads)
+            reconstructed_bytes = bytearray(max_len)
+            for i in range(max_len):
+                val = 0
+                for p in payloads:
+                    if i < len(p):
+                        val ^= p[i]
+                reconstructed_bytes[i] = val
+
+            reconstructed_payload = bytes(reconstructed_bytes)
+            reconstructed_text = reconstructed_payload.decode("ascii", errors="replace")
+
+            is_parity_part = (m == parity_idx)
+            if is_parity_part:
+                reconstructed_text = ""
+                changes = []
+                corrected_text = ""
+            else:
+                corrected_text, changes = postprocess_aura_text(reconstructed_text)
+                combined_changes.extend(changes)
+
+            ecc_scheme_used = decoded_parts[next(iter(decoded_parts))].get("ecc_scheme", 0) if decoded_parts else 0
+
+            repeat_factor = cfg.get("repeat_factor", 3)
+            decoded_m = {
+                "success": True,
+                "message_id": f"tx_{resolved_tx_id}_part_{m+1:02d}",
+                "file_name": f"tx_{resolved_tx_id}_part_{m+1:02d}_of_{total_segments:02d}.wav (reconstructed)",
+                "audio_duration_sec": 0.0,
+                "sample_rate": 16000,
+                "channels": 1,
+                "total_chunks": 0,
+                "header_chunks": 48 * repeat_factor,
+                "header_voted_nibbles": 48,
+                "decoded_message_length": len(reconstructed_payload),
+                "payload_chunks_needed": 0,
+                "total_needed_chunks": 0,
+                "ignored_tail_chunks": 0,
+                "header_valid": True,
+                "raw_text": reconstructed_text,
+                "corrected_text": corrected_text,
+                "changes": changes,
+                "recovery_status": "reconstructed",
+                "receiver_stdout": "Reconstructed in-memory via XOR parity.",
+                "codec_hint": 255 if is_parity_part else 0,
+                "ecc_scheme": ecc_scheme_used,
+                "payload_crc_ok": True,
+                "uncorrectable_count": 0,
+                "corrected_bits": 0,
+                "sync_lock": "Reconstructed",
+                "sync_ber": 0.0,
+                "payload_hex": reconstructed_payload.hex(),
+            }
+            decoded_parts[m] = decoded_m
+            reconstructed_idx = m
+            missing = []
+
+    ordered_segments: list[dict[str, Any]] = []
+    recovered_parts: list[str] = []
+    for idx in range(total_segments):
+        is_parity_part = (idx == parity_idx)
+        if idx in decoded_parts:
+            dec = decoded_parts[idx]
+            part_text = dec.get("corrected_text") or dec.get("raw_text") or ""
+            status = "reconstructed" if idx == reconstructed_idx else "decoded"
+            if not is_parity_part:
+                recovered_parts.append(part_text)
+            
             ordered_segments.append(
                 {
                     "segment_index": idx,
-                    "file_name": path.name,
-                    "audio_url": f"/outputs/{path.name}" if path.parent == OUTPUT_DIR else "",
-                    "status": "decoded",
+                    "file_name": dec.get("file_name") or f"tx_{resolved_tx_id}_part_{idx+1:02d}_of_{total_segments:02d}.wav",
+                    "audio_url": dec.get("audio_url") or "",
+                    "status": status,
                     "decoded_text": part_text,
+                    "metrics": {
+                        "syncLock": dec.get("sync_lock"),
+                        "syncBer": dec.get("sync_ber", 0.0),
+                        "uncorrectableCount": dec.get("uncorrectable_count", 0),
+                        "correctedBits": dec.get("corrected_bits", 0),
+                        "eccScheme": dec.get("ecc_scheme", 0),
+                        "codecHint": dec.get("codec_hint", 0),
+                        "payloadCrcOk": dec.get("payload_crc_ok", True),
+                    }
                 }
             )
-        except Exception as exc:
-            failed_segments.append(idx)
+        else:
+            status = "missing"
+            if idx in failed_segments:
+                status = "failed"
             ordered_segments.append(
                 {
                     "segment_index": idx,
-                    "file_name": path.name,
-                    "audio_url": f"/outputs/{path.name}" if path.parent == OUTPUT_DIR else "",
-                    "status": "failed",
+                    "file_name": f"tx_{resolved_tx_id}_part_{idx+1:02d}_of_{total_segments:02d}.wav",
+                    "audio_url": "",
+                    "status": status,
                     "decoded_text": "",
-                    "error": str(exc),
+                    "error": "Failed to decode" if idx in failed_segments else "File not found",
                 }
             )
 
-    if failed_segments:
+    if missing or failed_segments:
+        all_missing = list(set(missing + failed_segments))
         result = {
             "success": False,
             "mode": "multi",
             "transmission_id": resolved_tx_id,
             "total_segments": total_segments,
-            "received_segments": total_segments - len(failed_segments),
-            "missing_segments": [idx + 1 for idx in failed_segments],
+            "received_segments": total_segments - len(all_missing),
+            "missing_segments": [idx + 1 for idx in all_missing],
             "segments": ordered_segments,
             "recovery_status": "incomplete",
             "recovered_text": None,
-            "error": f"Missing segment(s): {total_segments - len(failed_segments)} of {total_segments}",
+            "error": f"Missing segment(s): {total_segments - len(all_missing)} of {total_segments}",
             "changes": combined_changes,
         }
     else:
@@ -1181,8 +1611,8 @@ def mean_absolute_error(left: list[float], right: list[float]) -> float | None:
 
 
 def spectrogram_delta_score(left_samples: list[float], right_samples: list[float]) -> float | None:
-    left = build_spectrogram(left_samples, 48, 24)["values"]
-    right = build_spectrogram(right_samples, 48, 24)["values"]
+    left = build_spectrogram(left_samples, 64, 48)["values"]
+    right = build_spectrogram(right_samples, 64, 48)["values"]
     if not left or not right:
         return None
     total = 0.0
@@ -1198,29 +1628,34 @@ def spectrogram_delta_score(left_samples: list[float], right_samples: list[float
 
 def spectrogram_to_svg(values: list[list[float]], title: str) -> str:
     width = 640
-    height = 220
-    margin_top = 20
+    height = 260
+    margin_top = 34
+    margin_left = 16
+    margin_right = 16
+    margin_bottom = 16
     rows = len(values)
     cols = len(values[0]) if rows else 0
-    cell_w = width / max(1, cols)
-    cell_h = (height - margin_top) / max(1, rows)
+    plot_width = width - margin_left - margin_right
+    plot_height = height - margin_top - margin_bottom
+    cell_w = plot_width / max(1, cols)
+    cell_h = plot_height / max(1, rows)
     rects: list[str] = []
     for row_index, row in enumerate(values):
         for col_index, value in enumerate(row):
             intensity = max(0.0, min(1.0, float(value)))
-            r = int(24 + 90 * intensity)
-            g = int(32 + 165 * intensity)
-            b = int(36 + 160 * intensity)
+            r = int(12 + 88 * intensity)
+            g = int(18 + 170 * intensity)
+            b = int(24 + 190 * intensity)
             opacity = 0.18 + 0.82 * intensity
             rects.append(
-                f'<rect x="{col_index * cell_w:.2f}" y="{margin_top + row_index * cell_h:.2f}" '
+                f'<rect x="{margin_left + col_index * cell_w:.2f}" y="{margin_top + (rows - 1 - row_index) * cell_h:.2f}" '
                 f'width="{cell_w + 0.5:.2f}" height="{cell_h + 0.5:.2f}" '
                 f'fill="rgb({r},{g},{b})" fill-opacity="{opacity:.3f}" />'
             )
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
-        f'<rect width="{width}" height="{height}" rx="16" fill="rgb(18,22,24)" />'
-        f'<text x="18" y="14" fill="rgb(176,190,194)" font-size="11" font-family="Arial, sans-serif">{title}</text>'
+        f'<rect width="{width}" height="{height}" rx="12" fill="rgb(10,12,15)" />'
+        f'<text x="{margin_left}" y="22" fill="rgb(176,190,198)" font-size="12" font-family="Arial, sans-serif">{title}</text>'
         + "".join(rects)
         + "</svg>"
     )
@@ -1550,24 +1985,28 @@ def build_compare_artifacts(
     artifact_dir = ANALYSIS_ARTIFACT_DIR / analysis_id
     prefix = f"part_{int(target.get('part_number') or 1):02d}_{cache_key}"
 
-    cover_samples, _ = read_mono_samples(cover_path)
-    stego_samples, _ = read_mono_samples(stego_path)
+    cover_samples, cover_rate = read_mono_samples(cover_path)
+    stego_samples, stego_rate = read_mono_samples(stego_path)
     compare_count = min(len(cover_samples), len(stego_samples))
     diff_samples = [stego_samples[i] - cover_samples[i] for i in range(compare_count)]
+    sample_rate = stego_rate or cover_rate or 16000
+    cover_spectrogram = build_spectrogram(cover_samples, 192, 112, sample_rate=cover_rate or sample_rate)
+    stego_spectrogram = build_spectrogram(stego_samples, 192, 112, sample_rate=sample_rate)
+    residual_spectrogram = build_spectrogram(diff_samples, 192, 112, sample_rate=sample_rate)
 
     cover_url = write_analysis_svg(
         artifact_dir / f"{prefix}_cover.svg",
-        build_spectrogram(cover_samples, 56, 24)["values"],
+        cover_spectrogram["values"],
         "Cover spectrogram",
     )
     stego_url = write_analysis_svg(
         artifact_dir / f"{prefix}_stego.svg",
-        build_spectrogram(stego_samples, 56, 24)["values"],
+        stego_spectrogram["values"],
         "Stego spectrogram",
     )
     diff_url = write_analysis_svg(
         artifact_dir / f"{prefix}_diff.svg",
-        build_spectrogram(diff_samples, 56, 24)["values"],
+        residual_spectrogram["values"],
         "Residual spectrogram",
     )
 
@@ -1578,6 +2017,21 @@ def build_compare_artifacts(
         "diffImageUrl": diff_url,
         "selectedPart": int(target.get("part_number") or 1),
         "partOptions": [int(row.get("part_number") or 1) for row in generation_rows],
+        "spectrograms": {
+            "cover": cover_spectrogram,
+            "stego": stego_spectrogram,
+            "residual": residual_spectrogram,
+        },
+        "frequencyDelta": build_frequency_delta(
+            cover_spectrogram,
+            stego_spectrogram,
+            residual_spectrogram,
+        ),
+        "residualAnalysis": {
+            "sampleRate": sample_rate,
+            "residualWaveform": build_waveform_points(diff_samples, 360),
+            "residualSpectrogram": residual_spectrogram,
+        },
     }
 
 
@@ -1958,11 +2412,18 @@ def _build_grouped_analysis_from_reveal(
     cover_waveform = []
     stego_waveform = []
     diff_waveform = []
+    signal_spectrogram = {"timeBins": 192, "freqBins": 112, "values": []}
+    signal_waveform = []
 
     selected_part = selected_part_number or 1
     selected_stego = None
     if 1 <= selected_part <= len(audio_paths):
         selected_stego = audio_paths[selected_part - 1]
+
+    if selected_stego and selected_stego.exists():
+        selected_samples, selected_rate = read_mono_samples(selected_stego)
+        signal_waveform = build_waveform_points(selected_samples, 360)
+        signal_spectrogram = build_spectrogram(selected_samples, 192, 112, sample_rate=selected_rate)
 
     selected_generation = None
     for row in generation_rows:
@@ -1980,6 +2441,23 @@ def _build_grouped_analysis_from_reveal(
             cover_waveform = build_waveform_points(cover_samples, 240)
             stego_waveform = build_waveform_points(stego_samples, 240)
             diff_waveform = build_waveform_points(diff_samples, 240)
+
+    selected_part = selected_part_number or 1
+    selected_metrics = {
+        "syncLock": "N/A",
+        "syncBer": 0.0,
+        "uncorrectableCount": 0,
+        "correctedBits": 0,
+        "eccScheme": 0,
+        "codecHint": 0,
+        "payloadCrcOk": True,
+    }
+    
+    segments_list = decode.get("segments") or []
+    for seg in segments_list:
+        if int(seg.get("segment_index", 0)) + 1 == selected_part:
+            selected_metrics = seg.get("metrics") or selected_metrics
+            break
 
     payload = {
         "analysisId": analysis_id,
@@ -1999,6 +2477,8 @@ def _build_grouped_analysis_from_reveal(
         "filesProcessed": int(decode.get("received_segments") or total_files),
         "filesTotal": total_files,
         "summary": summary,
+        "transmissionMetrics": selected_metrics,
+        "segments": segments_list,
         "provenance": {
             "hasCoverStegoLink": bool(compare.get("available")),
             "grouped": True,
@@ -2034,6 +2514,9 @@ def _build_grouped_analysis_from_reveal(
                 "diffImageUrl": compare.get("diffImageUrl"),
                 "selectedPart": compare.get("selectedPart"),
                 "partOptions": compare.get("partOptions") or [],
+                "spectrograms": compare.get("spectrograms"),
+                "frequencyDelta": compare.get("frequencyDelta") or [],
+                "residualAnalysis": compare.get("residualAnalysis"),
             },
             "waveformComparison": {
                 "available": bool(cover_waveform and stego_waveform),
@@ -2041,6 +2524,8 @@ def _build_grouped_analysis_from_reveal(
                 "stegoWaveform": stego_waveform,
                 "differenceWaveform": diff_waveform,
             },
+            "signalSpectrogram": signal_spectrogram,
+            "signalWaveform": signal_waveform,
         },
         "chunkTable": chunk_table,
         "recovery": {
@@ -2079,16 +2564,10 @@ def analyze_message(
     audio_url: str | None = None,
     file_name: str | None = None,
     total_parts: int | None = None,
+    simulation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Main Analysis entrypoint.
-
-    Critical behavior:
-    - If total_parts > 1, Analysis ALWAYS runs in grouped mode (same semantics as Reveal).
-    - Never silently fall back to single-file analysis for grouped transmissions.
-    - Reuse persisted reveal/decode only if it is SUCCESSFUL and COMPLETE.
-    - If no persisted forensic artifact exists, build a full renderable analysis payload
-      from grouped reveal reconstruction so the UI still gets charts / diagnostics.
     """
     ensure_dirs()
     started_at = time.time()
@@ -2118,52 +2597,94 @@ def analyze_message(
     analysis_message_id = source.get("analysis_message_id") or message_id or target_label
     mode = source.get("mode") or "single"
 
-    print(
-        f"[analysis] start target={target_label} "
-        f"mode={mode} "
-        f"normalized_single_part={normalized_single_part} "
-        f"tx={source.get('transmission_id')} "
-        f"part={source.get('selected_part_number')}"
-    )
-
     audio_paths: list[Path] = source.get("audio_paths") or []
     expected_audio_paths: list[Path] = source.get("expected_audio_paths") or []
     missing_audio_paths: list[Path] = source.get("missing_audio_paths") or []
+    
+    if not expected_audio_paths:
+        expected_audio_paths = audio_paths
+        
     files_total = int(source.get("files_total") or max(1, len(expected_audio_paths) or len(audio_paths) or 1))
+
+    # Parse simulation options
+    is_simulation = False
+    sim_noise = 0.0
+    sim_clipping = 100.0
+    sim_transcode = "None"
+    sim_dropped = []
+    
+    if simulation:
+        sim_noise = float(simulation.get("noiseLevel", simulation.get("noise_level", 0.0)))
+        sim_clipping = float(simulation.get("clippingLevel", simulation.get("clipping_level", 100.0)))
+        sim_transcode = str(simulation.get("transcodeType", simulation.get("transcode_type", "None")))
+        sim_dropped = list(simulation.get("droppedParts", simulation.get("dropped_parts", [])))
+        if sim_noise > 0 or sim_clipping < 100 or sim_transcode != "None" or sim_dropped:
+            is_simulation = True
+
+    if is_simulation:
+        sim_dir = OUTPUT_DIR / "simulated" / uuid.uuid4().hex
+        sim_dir.mkdir(parents=True, exist_ok=True)
+        
+        simulated_audio_paths = []
+        for idx, expected_path in enumerate(expected_audio_paths):
+            part_num = idx + 1
+            if part_num in sim_dropped:
+                print(f"[simulation] dropping part {part_num}: {expected_path.name}")
+                continue
+                
+            if not expected_path.exists():
+                continue
+                
+            sim_path = sim_dir / expected_path.name
+            print(f"[simulation] applying effects to part {part_num} -> {sim_path.name}")
+            try:
+                apply_dsp_simulation(
+                    input_path=expected_path,
+                    output_path=sim_path,
+                    noise_level=sim_noise,
+                    clipping_level=sim_clipping,
+                    transcode_type=sim_transcode,
+                )
+                simulated_audio_paths.append(sim_path)
+            except Exception as e:
+                print(f"[simulation] failed to apply effects: {e}")
+                
+        audio_paths = simulated_audio_paths
 
     if mode == "grouped":
         if files_total <= 1:
             mode = "single"
             source["mode"] = "single"
         else:
-            if missing_audio_paths:
-                elapsed_ms = int((time.time() - started_at) * 1000)
-                return terminal_analysis_payload(
-                    status="missing_source",
-                    error_code="missing_group_parts",
-                    reason=(
-                        f"Grouped analysis requires all parts. "
-                        f"Found {len(audio_paths)} of {files_total} part(s)."
-                    ),
-                    message_id=analysis_message_id,
-                    source=source,
-                    missing_paths=missing_audio_paths,
-                    elapsed_ms=elapsed_ms,
-                )
-            if len(audio_paths) != files_total:
-                elapsed_ms = int((time.time() - started_at) * 1000)
-                return terminal_analysis_payload(
-                    status="missing_source",
-                    error_code="group_part_count_mismatch",
-                    reason=(
-                        f"Grouped analysis expected {files_total} part(s) "
-                        f"but only resolved {len(audio_paths)} file(s)."
-                    ),
-                    message_id=analysis_message_id,
-                    source=source,
-                    missing_paths=missing_audio_paths,
-                    elapsed_ms=elapsed_ms,
-                )
+            if not is_simulation:
+                if missing_audio_paths:
+                    elapsed_ms = int((time.time() - started_at) * 1000)
+                    return terminal_analysis_payload(
+                        status="missing_source",
+                        error_code="missing_group_parts",
+                        reason=(
+                            f"Grouped analysis requires all parts. "
+                            f"Found {len(audio_paths)} of {files_total} part(s)."
+                        ),
+                        message_id=analysis_message_id,
+                        source=source,
+                        missing_paths=missing_audio_paths,
+                        elapsed_ms=elapsed_ms,
+                    )
+                if len(audio_paths) != files_total:
+                    elapsed_ms = int((time.time() - started_at) * 1000)
+                    return terminal_analysis_payload(
+                        status="missing_source",
+                        error_code="group_part_count_mismatch",
+                        reason=(
+                            f"Grouped analysis expected {files_total} part(s) "
+                            f"but only resolved {len(audio_paths)} file(s)."
+                        ),
+                        message_id=analysis_message_id,
+                        source=source,
+                        missing_paths=missing_audio_paths,
+                        elapsed_ms=elapsed_ms,
+                    )
 
     if not audio_paths:
         elapsed_ms = int((time.time() - started_at) * 1000)
@@ -2181,10 +2702,9 @@ def analyze_message(
     persisted_decode = source.get("decode")
 
     reusable_decode = None
-    if persisted_decode:
+    if persisted_decode and not is_simulation:
         persisted_success = bool(persisted_decode.get("success"))
         persisted_status = (persisted_decode.get("recovery_status") or "").lower()
-
         is_group_complete = (
             persisted_success
             and (
@@ -2195,30 +2715,19 @@ def analyze_message(
                 )
             )
         )
-
         if is_group_complete:
             reusable_decode = persisted_decode
-            print(
-                f"[analysis] grouped reuse existing reveal "
-                f"tx={source.get('transmission_id')} success=True status={persisted_status or 'complete'}"
-            )
-        else:
-            print(
-                f"[analysis] grouped reveal artifact exists but not usable "
-                f"tx={source.get('transmission_id')} "
-                f"success={persisted_success} status={persisted_status or 'unknown'} -> recomputing"
-            )
 
     decode_result: dict[str, Any] | None = reusable_decode
 
     if decode_result is None:
         try:
-            if mode == "grouped" and len(audio_paths) > 1:
+            if files_total > 1:
                 print(f"[analysis] decoding grouped transmission tx={source.get('transmission_id')}")
                 decode_result = recover_grouped_transmission(
                     audio_paths,
                     transmission_id=source.get("transmission_id"),
-                    persist=True,
+                    persist=not is_simulation,
                     per_file_timeout_seconds=GROUPED_ANALYSIS_TIMEOUT_SECONDS,
                 )
             else:
@@ -2228,6 +2737,7 @@ def analyze_message(
                     target_path,
                     message_id=analysis_message_id,
                     timeout_seconds=SINGLE_ANALYSIS_TIMEOUT_SECONDS,
+                    persist=not is_simulation,
                 )
         except subprocess.TimeoutExpired:
             elapsed_ms = int((time.time() - started_at) * 1000)
@@ -2264,7 +2774,7 @@ def analyze_message(
             elapsed_ms=elapsed_ms,
         )
 
-    if mode == "grouped" and not bool(decode_result.get("success")):
+    if files_total > 1 and not bool(decode_result.get("success")):
         recovery_status_value = (decode_result.get("recovery_status") or "").lower()
         elapsed_ms = int((time.time() - started_at) * 1000)
 
@@ -2293,7 +2803,7 @@ def analyze_message(
             elapsed_ms=elapsed_ms,
         )
 
-    if mode == "single":
+    if files_total == 1:
         analysis_id = f"analysis_{analysis_message_id}"
         generation_rows = load_generation_rows(analysis_message_id, encode)
         compare = build_compare_artifacts(
@@ -2377,9 +2887,12 @@ def analyze_message(
         cover_waveform = []
         stego_waveform = []
         diff_waveform = []
+        target_samples, target_rate = read_mono_samples(target_path)
+        signal_waveform = build_waveform_points(target_samples, 360)
+        signal_spectrogram = build_spectrogram(target_samples, 192, 112, sample_rate=target_rate)
         if cover_path and cover_path.exists():
             cover_samples, _ = read_mono_samples(cover_path)
-            stego_samples, _ = read_mono_samples(target_path)
+            stego_samples = target_samples
             count = min(len(cover_samples), len(stego_samples))
             diff_samples = [stego_samples[i] - cover_samples[i] for i in range(count)]
             cover_waveform = build_waveform_points(cover_samples, 240)
@@ -2404,6 +2917,33 @@ def analyze_message(
             "filesProcessed": 1,
             "filesTotal": 1,
             "summary": summary,
+            "transmissionMetrics": {
+                "syncLock": decode_result.get("sync_lock"),
+                "syncBer": decode_result.get("sync_ber", 0.0),
+                "uncorrectableCount": decode_result.get("uncorrectable_count", 0),
+                "correctedBits": decode_result.get("corrected_bits", 0),
+                "eccScheme": decode_result.get("ecc_scheme", 0),
+                "codecHint": decode_result.get("codec_hint", 0),
+                "payloadCrcOk": decode_result.get("payload_crc_ok", True),
+            },
+            "segments": [
+                {
+                    "segment_index": 0,
+                    "file_name": target_path.name,
+                    "audio_url": f"/outputs/{target_path.name}" if target_path.parent == OUTPUT_DIR else "",
+                    "status": "decoded",
+                    "decoded_text": recovered_text,
+                    "metrics": {
+                        "syncLock": decode_result.get("sync_lock"),
+                        "syncBer": decode_result.get("sync_ber", 0.0),
+                        "uncorrectableCount": decode_result.get("uncorrectable_count", 0),
+                        "correctedBits": decode_result.get("corrected_bits", 0),
+                        "eccScheme": decode_result.get("ecc_scheme", 0),
+                        "codecHint": decode_result.get("codec_hint", 0),
+                        "payloadCrcOk": decode_result.get("payload_crc_ok", True),
+                    }
+                }
+            ],
             "provenance": {
                 "hasCoverStegoLink": bool(compare.get("available")),
                 "grouped": False,
@@ -2435,6 +2975,9 @@ def analyze_message(
                     "coverImageUrl": compare.get("coverImageUrl"),
                     "stegoImageUrl": compare.get("stegoImageUrl"),
                     "diffImageUrl": compare.get("diffImageUrl"),
+                    "spectrograms": compare.get("spectrograms"),
+                    "frequencyDelta": compare.get("frequencyDelta") or [],
+                    "residualAnalysis": compare.get("residualAnalysis"),
                 },
                 "waveformComparison": {
                     "available": bool(cover_waveform and stego_waveform),
@@ -2442,6 +2985,8 @@ def analyze_message(
                     "stegoWaveform": stego_waveform,
                     "differenceWaveform": diff_waveform,
                 },
+                "signalSpectrogram": signal_spectrogram,
+                "signalWaveform": signal_waveform,
             },
             "chunkTable": chunk_table,
             "recovery": {
@@ -2459,13 +3004,14 @@ def analyze_message(
             ],
         }
 
-        persist_analysis(
-            analysis_id=analysis_id,
-            source_type="single",
-            source_ref_id=analysis_message_id,
-            summary=summary,
-            chunk_table=chunk_table,
-        )
+        if not is_simulation:
+            persist_analysis(
+                analysis_id=analysis_id,
+                source_type="single",
+                source_ref_id=analysis_message_id,
+                summary=summary,
+                chunk_table=chunk_table,
+            )
         return payload
 
     try:

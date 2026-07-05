@@ -1,6 +1,8 @@
 import os
 import json
 import argparse
+import struct
+import time
 from pathlib import Path
 
 import torch
@@ -38,11 +40,11 @@ REJECTED_CARRIERS = [
 ]
 
 # ------------------------------------------------------------
-# LENGTH HEADER SETTINGS
-# 2 bytes => 4 nibbles => repeat-3 => 12 chunks
+# COMPACT HEADER SETTINGS
+# 24 bytes => 48 nibbles
 # ------------------------------------------------------------
-HEADER_BYTES = 2
-HEADER_NIBBLES = HEADER_BYTES * 2  # 4
+HEADER_BYTES = 24
+HEADER_NIBBLES = 48
 
 
 def load_cfg(config_path):
@@ -92,53 +94,32 @@ def repeat_nibbles(nibbles, repeat_factor=3):
 
 
 # ============================================================
-# LENGTH HEADER HELPERS
+# protocol and ecc helpers
 # ============================================================
 
-def length_to_header_nibbles(msg_len):
-    """
-    Store message length as 2-byte unsigned integer (big-endian).
-    Returns 4 nibbles total.
-    """
-    if not (0 <= msg_len <= 65535):
-        raise ValueError("Message too long for 2-byte length header (max 65535 chars).")
-
-    b0 = (msg_len >> 8) & 0xFF
-    b1 = msg_len & 0xFF
-
-    b0_hi, b0_lo = byte_to_nibbles(b0)
-    b1_hi, b1_lo = byte_to_nibbles(b1)
-
-    return [b0_hi, b0_lo, b1_hi, b1_lo]
+def crc16(data: bytes) -> int:
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            if crc & 1:
+                crc = (crc >> 1) ^ 0xA001
+            else:
+                crc >>= 1
+    return crc & 0xFFFF
 
 
-def get_header_chunk_count(repeat_factor):
-    return HEADER_NIBBLES * repeat_factor
-
-
-def get_total_required_chunks_for_text(text_len, cfg):
-    """
-    Total chunks = header chunks + payload chunks
-    payload chunks = text_len * chunks_per_char_protected
-    """
-    header_chunks = get_header_chunk_count(cfg["repeat_factor"])
-    payload_chunks = text_len * cfg["chunks_per_char_protected"]
-    return header_chunks + payload_chunks
-
-
-def build_all_raw_nibbles_with_header(text):
-    """
-    Returns:
-      header_nibbles, payload_nibbles, all_raw_nibbles
-    """
-    text = safe_ascii_text(text)
-    msg_len = len(text)
-
-    header_nibbles = length_to_header_nibbles(msg_len)
-    payload_nibbles = text_to_nibble_sequence(text)
-    all_raw_nibbles = header_nibbles + payload_nibbles
-
-    return header_nibbles, payload_nibbles, all_raw_nibbles
+def hamming_8_4_encode_nibble(nibble: int):
+    # nibble is 4 bits: d0, d1, d2, d3
+    d = [(nibble >> i) & 1 for i in range(4)]
+    d1, d2, d3, d4 = d[0], d[1], d[2], d[3]
+    p1 = d1 ^ d2 ^ d4
+    p2 = d1 ^ d3 ^ d4
+    p3 = d2 ^ d3 ^ d4
+    c7 = [p1, p2, d1, p3, d2, d3, d4]
+    p4 = p1 ^ p2 ^ d1 ^ p3 ^ d2 ^ d3 ^ d4
+    b = (p1 << 7) | (p2 << 6) | (d1 << 5) | (p3 << 4) | (d2 << 3) | (d3 << 2) | (d4 << 1) | p4
+    return (b >> 4) & 0x0F, b & 0x0F
 
 
 def load_audio_mono_16k(path, target_sr=16000):
@@ -276,22 +257,77 @@ def make_stego_from_cover_and_bits(cover_wav, bits4, strength, cfg):
 
 
 @torch.no_grad()
-def encode_message_to_stego_chunks(cover_chunks, text, cfg):
+def encode_message_to_stego_chunks(cover_chunks, text, transmission_id, part_index, total_parts, ecc_scheme, codec_hint, cfg, payload_bytes=None):
     """
-    NEW:
-    Encodes [header][payload] instead of payload-only.
-    Header stores message length (2 bytes => 4 nibbles).
+    Structured as a network packet:
+    [SYNC_MARKER (12 nibbles)] [HEADER (48 nibbles)] [PAYLOAD_NIBBLES (P nibbles)] [SYNC_MARKER (12 nibbles)]
     """
-    text = safe_ascii_text(text)
+    if payload_bytes is None:
+        text = safe_ascii_text(text)
+        payload_bytes = text.encode("ascii", errors="ignore")
+    payload_len = len(payload_bytes)
+    crc_payload = crc16(payload_bytes)
 
-    header_nibbles, payload_nibbles, all_raw_nibbles = build_all_raw_nibbles_with_header(text)
-    repeated_nibbles = repeat_nibbles(all_raw_nibbles, repeat_factor=cfg["repeat_factor"])
+    # 1. Determine payload nibbles
+    if ecc_scheme == 1:
+        payload_nibbles = []
+        for b in payload_bytes:
+            hi, lo = byte_to_nibbles(b)
+            h_hi, h_lo = hamming_8_4_encode_nibble(hi)
+            payload_nibbles.extend([h_hi, h_lo])
+            l_hi, l_lo = hamming_8_4_encode_nibble(lo)
+            payload_nibbles.extend([l_hi, l_lo])
+    else:
+        payload_nibbles = []
+        for b in payload_bytes:
+            hi, lo = byte_to_nibbles(b)
+            payload_nibbles.extend([hi, lo])
 
-    needed = len(repeated_nibbles)
+    # 2. Apply repeat factor to payload
+    repeat_factor = cfg["repeat_factor"]
+    repeated_payload_nibbles = repeat_nibbles(payload_nibbles, repeat_factor=repeat_factor)
+
+    # 3. Compute total chunks (header is repeated too)
+    sync_pattern = [10, 10, 4, 1, 5, 5, 5, 2, 4, 1, 10, 10]
+    repeated_header_count = 48 * repeat_factor
+    total_chunks = 12 + repeated_header_count + len(repeated_payload_nibbles) + 12
+
+    # 4. Pack header
+    timestamp = int(time.time())
+    header_bytes_without_chk = struct.pack(
+        ">4sB I B B H H H B B I",
+        b"AURA",
+        1,               # Version
+        transmission_id,
+        part_index,
+        total_parts,
+        payload_len,
+        crc_payload,
+        total_chunks,
+        ecc_scheme,
+        codec_hint,
+        timestamp
+    )
+    header_checksum = sum(header_bytes_without_chk) % 256
+    header_bytes = header_bytes_without_chk + struct.pack("B", header_checksum)
+
+    # 5. Convert header bytes to nibbles
+    header_nibbles = []
+    for b in header_bytes:
+        hi, lo = byte_to_nibbles(b)
+        header_nibbles.extend([hi, lo])
+
+    # 5b. Apply repeat factor to header
+    repeated_header_nibbles = repeat_nibbles(header_nibbles, repeat_factor=repeat_factor)
+
+    # 6. Final sequence of nibbles
+    all_nibbles = sync_pattern + repeated_header_nibbles + repeated_payload_nibbles + sync_pattern
+    
+    needed = len(all_nibbles)
     assert cover_chunks.size(0) >= needed, f"Need {needed} chunks, got {cover_chunks.size(0)}"
 
     bits = torch.tensor(
-        [nibble_to_bits4(n) for n in repeated_nibbles],
+        [nibble_to_bits4(n) for n in all_nibbles],
         device=cover_chunks.device,
         dtype=torch.float32
     )
@@ -303,7 +339,7 @@ def encode_message_to_stego_chunks(cover_chunks, text, cfg):
         cfg=cfg
     )
 
-    return stego_chunks, header_nibbles, payload_nibbles, all_raw_nibbles, repeated_nibbles
+    return stego_chunks, header_nibbles, payload_nibbles, all_nibbles, repeated_payload_nibbles
 
 
 # ============================================================
@@ -377,17 +413,40 @@ def main():
     parser.add_argument("--cover", default=None, help="Manual input cover audio (old mode)")
     parser.add_argument("--carrier-dir", default=None, help="Carrier bank folder (safe mode)")
     parser.add_argument("--safe-mode", action="store_true", help="Auto-pick only approved safe carriers")
-    parser.add_argument("--text", required=True, help="Secret text")
+    parser.add_argument("--text", default=None, help="Secret text")
+    parser.add_argument("--payload-hex", default=None, help="Hex payload bytes (bypass text check)")
     parser.add_argument("--out", required=True, help="Output stego wav")
+    parser.add_argument("--transmission-id", type=int, default=0)
+    parser.add_argument("--part-index", type=int, default=0)
+    parser.add_argument("--total-parts", type=int, default=1)
+    parser.add_argument("--ecc-scheme", type=int, default=0)
+    parser.add_argument("--codec-hint", type=int, default=0)
     args = parser.parse_args()
 
     cfg = load_cfg(args.config)
-    text = safe_ascii_text(args.text)
+    
+    if args.payload_hex is not None:
+        payload_bytes = bytes.fromhex(args.payload_hex)
+        text = payload_bytes.decode("ascii", errors="replace")
+    else:
+        if args.text is None:
+            raise ValueError("Either --text or --payload-hex must be provided")
+        text = safe_ascii_text(args.text)
+        payload_bytes = text.encode("ascii", errors="ignore")
 
-    msg_len = len(text)
-    header_chunks = get_header_chunk_count(cfg["repeat_factor"])
-    payload_chunks = msg_len * cfg["chunks_per_char_protected"]
-    required_chunks = header_chunks + payload_chunks
+    msg_len = len(payload_bytes)
+
+    # Calculate required chunks under the new framing protocol
+    # sync(12) + header_repeated + payload_repeated + sync(12)
+    if args.ecc_scheme == 1:
+        payload_nibbles_count = msg_len * 4
+    else:
+        payload_nibbles_count = msg_len * 2
+
+    repeat_factor = cfg["repeat_factor"]
+    repeated_payload_count = payload_nibbles_count * repeat_factor
+    repeated_header_count = 48 * repeat_factor
+    required_chunks = 12 + repeated_header_count + repeated_payload_count + 12
     required_seconds = required_chunks * cfg["chunk_seconds"]
 
     chosen_cover = None
@@ -417,23 +476,22 @@ def main():
         )
 
     print("=" * 80)
-    print("AURA V2-R SENDER (LENGTH-HEADER MODE)")
+    print("AURA V2-R SENDER (COVERT PACKET ARCHITECTURE)")
     print("=" * 80)
     print("Text               :", repr(text))
     print("Chars              :", msg_len)
-    print("Header bytes       :", HEADER_BYTES)
-    print("Header nibbles     :", HEADER_NIBBLES)
-    print("Header chunks      :", header_chunks)
-    print("Payload chunks     :", payload_chunks)
+    print("Transmission ID    :", args.transmission_id)
+    print("Part Index         :", args.part_index)
+    print("Total Parts        :", args.total_parts)
+    print("ECC Scheme         :", "Hamming(8,4)" if args.ecc_scheme == 1 else "None")
+    print("Codec Hint         :", args.codec_hint)
     print("Required chunks    :", required_chunks)
     print("Required seconds   :", round(required_seconds, 2))
-    print("Required minutes   :", round(required_seconds / 60.0, 2))
     print("Mode               :", "SAFE MODE" if args.safe_mode else "MANUAL MODE")
     print("Chosen cover       :", chosen_cover)
     print("Cover duration     :", round(chosen_cover_duration, 2), "sec")
     print("Embed strength     :", cfg["embed_strength_val"], "(LOCKED FROM CONFIG)")
 
-    # Enforce true capacity honestly
     fits, actual_dur = can_fit_message(
         chosen_cover,
         required_seconds,
@@ -454,21 +512,20 @@ def main():
     )
 
     stego_chunks, header_nibbles, payload_nibbles, all_raw_nibbles, repeated_nibbles = encode_message_to_stego_chunks(
-        cover_chunks, text, cfg
+        cover_chunks, text, args.transmission_id, args.part_index, args.total_parts, args.ecc_scheme, args.codec_hint, cfg, payload_bytes=payload_bytes
     )
 
     stego_long = stego_chunks.cpu().squeeze(1).reshape(-1).unsqueeze(0)
 
-    # Save as 32-bit float WAV for best fidelity
     torchaudio.save(
-    args.out,
-    stego_long,
-    sample_rate=cfg["sample_rate"]
-)
+        args.out,
+        stego_long,
+        sample_rate=cfg["sample_rate"]
+    )
 
     print("Header raw nibbles :", len(header_nibbles))
     print("Payload nibbles    :", len(payload_nibbles))
-    print("Total raw nibbles  :", len(all_raw_nibbles))
+    print("Total chunks       :", len(all_raw_nibbles))
     print("Repeated nibbles   :", len(repeated_nibbles))
     print("Saved stego file   :", args.out)
     print("=" * 80)

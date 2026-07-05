@@ -7,6 +7,7 @@ import { ComposeScreen } from './screens/ComposeScreen'
 import { EncodePage } from './screens/EncodePage'
 import { RevealPageV2 } from './screens/RevealPageV2'
 import { SettingsPageV2 } from './screens/SettingsPageV2'
+import CompareScreen from './screens/CompareScreen'
 import {
   createMessage,
   getAnalysis,
@@ -57,6 +58,12 @@ const screenFrames: Record<Exclude<NavKey, 'chat'>, ScreenFrame> = {
     title: 'Analysis',
     subtitle: 'Inspect signal, payload, encode, decode, and recovery structure.',
   },
+  compare: {
+  eyebrow: 'Comparative forensics',
+  title: 'Compare',
+  subtitle:
+    'Compare multiple Aura analysis runs side-by-side.',
+},
   settings: {
     eyebrow: 'Environment',
     title: 'Settings',
@@ -920,6 +927,11 @@ function handleSelectAudio(audio: SelectedAudio) {
   setSelectedAudio(audio)
   setDecodeResult(null)
 }
+
+function handleCompareSelectAudio(audio: SelectedAudio) {
+  handleSelectAudio(audio)
+  runAnalysis(audio)
+}
   function handleReveal(audio: SelectedAudio) {
     handleSelectAudio(audio)
     setActiveScreen('reveal')
@@ -1068,7 +1080,7 @@ async function runAnalysis(audio: SelectedAudio, options?: { force?: boolean }) 
   }
 
   const hideContextHeader =
-    activeScreen === 'encode' || activeScreen === 'reveal'
+    activeScreen === 'encode' || activeScreen === 'reveal' || activeScreen === 'analysis'
 
   if (booting) {
     return (
@@ -1092,12 +1104,10 @@ async function runAnalysis(audio: SelectedAudio, options?: { force?: boolean }) 
         theme === 'light' ? 'theme-light' : ''
       }`}
     >
-      <div className="pointer-events-none absolute inset-0 bg-noise opacity-55" />
-      <div className="pointer-events-none absolute -left-40 top-0 h-[340px] w-[340px] rounded-full bg-[radial-gradient(circle,rgba(93,87,255,0.08),transparent_68%)] blur-3xl" />
-      <div className="pointer-events-none absolute right-0 top-24 h-[280px] w-[280px] rounded-full bg-[radial-gradient(circle,rgba(114,209,199,0.035),transparent_68%)] blur-3xl" />
+      <div className="pointer-events-none absolute inset-0 bg-noise opacity-60" />
 
       <div className="relative flex h-full min-h-0">
-        <AppSidebar active={activeScreen} onSelect={setActiveScreen} />
+        <AppSidebar active={activeScreen} onSelect={setActiveScreen}  theme={theme}/>
 
         <main
           className={
@@ -1156,9 +1166,23 @@ async function runAnalysis(audio: SelectedAudio, options?: { force?: boolean }) 
                   error={analysisError}
                   hasAttempted={hasAttemptedAnalysis}
                   status={analysisStatus}
+                  theme={theme}
+                  onThemeChange={setTheme}
                 />
               ) : null}
-
+              
+{activeScreen === 'compare' ? (
+  <CompareScreen
+    analysis={analysis}
+    selectedAudio={selectedAudio}
+    availableAudio={availableAnalysisAudio}
+    loading={analysisLoading}
+    error={analysisError}
+    onSelectAudio={handleCompareSelectAudio}
+    onAnalyzeAudio={handleAnalyze}
+    theme={theme}
+  />
+) : null}
               {activeScreen === 'settings' ? (
                 <SettingsPageV2
                   theme={theme}

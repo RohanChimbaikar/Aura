@@ -66,7 +66,7 @@ Thumbs.db
 *.bin
 
 # Generated media (uncomment if needed later)
-# *.wav
-# *.mp3
-# *.flac
-# *.zip
+*.wav
+*.mp3
+*.flac
+*.zip

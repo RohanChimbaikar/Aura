@@ -635,6 +635,7 @@ export async function getAnalysis(target: SelectedAudio): Promise<AnalysisPayloa
       totalParts: target.totalSegments,
       audioUrl: target.audioUrl,
       fileName: target.fileName,
+      simulation: target.simulation,
     }),
   })
 

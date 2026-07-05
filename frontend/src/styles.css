@@ -6,18 +6,20 @@
 
 :root {
   color-scheme: dark;
-  --aura-bg: 10 10 12;
-  --aura-surface: 17 17 23;
-  --aura-surface-soft: 21 21 28;
-  --aura-border: 255 255 255;
-  --aura-text: 242 243 247;
-  --aura-muted: 138 141 157;
-  --aura-dim: 93 96 114;
-  --aura-accent: 93 87 255;
-  --aura-accent-soft: 93 87 255;
-  --aura-reveal: 114 209 199;
-  --aura-reveal-soft: 114 209 199;
-  --aura-danger: 255 143 131;
+  --aura-bg: 12 13 15;
+  --aura-surface: 18 19 23;
+  --aura-surface-soft: 24 26 31;
+  --aura-border: 176 184 198;
+  --aura-text: 238 241 245;
+  --aura-muted: 143 151 165;
+  --aura-dim: 88 96 111;
+  --aura-accent: 126 132 184;
+  --aura-accent-soft: 126 132 184;
+  --aura-reveal: 91 173 190;
+  --aura-reveal-soft: 91 173 190;
+  --aura-danger: 232 116 101;
+  --aura-panel: 18 19 23;
+  --aura-panel-soft: 24 26 31;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -26,18 +28,20 @@
 
 .theme-light {
   color-scheme: light;
-  --aura-bg: 244 245 249;
-  --aura-surface: 255 255 255;
-  --aura-surface-soft: 241 243 248;
-  --aura-border: 78 87 112;
-  --aura-text: 22 24 33;
-  --aura-muted: 89 96 120;
-  --aura-dim: 113 121 145;
-  --aura-accent: 93 87 255;
-  --aura-accent-soft: 93 87 255;
-  --aura-reveal: 61 164 153;
-  --aura-reveal-soft: 61 164 153;
-  --aura-danger: 215 98 84;
+  --aura-bg: 246 244 240;
+  --aura-surface: 253 252 249;
+  --aura-surface-soft: 238 237 233;
+  --aura-border: 93 101 118;
+  --aura-text: 24 27 33;
+  --aura-muted: 91 98 112;
+  --aura-dim: 128 134 146;
+  --aura-accent: 95 105 153;
+  --aura-accent-soft: 95 105 153;
+  --aura-reveal: 48 132 148;
+  --aura-reveal-soft: 48 132 148;
+  --aura-danger: 188 86 72;
+  --aura-panel: 253 252 249;
+  --aura-panel-soft: 238 237 233;
 }
 
 * {
@@ -64,6 +68,275 @@ textarea {
 }
 
 @layer utilities {
+  .aura-analysis-atmosphere::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(circle at 58% 8%, rgba(91, 173, 190, 0.1), transparent 32%),
+      radial-gradient(circle at 80% 34%, rgba(95, 105, 153, 0.11), transparent 34%),
+      radial-gradient(circle at 35% 100%, rgba(255, 255, 255, 0.035), transparent 38%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 20%, rgba(0, 0, 0, 0.18));
+    opacity: 0.9;
+  }
+
+  .theme-light .aura-analysis-atmosphere::before {
+    background:
+      radial-gradient(circle at 58% 8%, rgba(48, 132, 148, 0.1), transparent 34%),
+      radial-gradient(circle at 80% 34%, rgba(95, 105, 153, 0.08), transparent 34%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.5), transparent 34%, rgba(93, 101, 118, 0.07));
+  }
+
+  .aura-glass-panel {
+    border: 1px solid rgb(var(--aura-border) / 0.12);
+    background:
+      linear-gradient(180deg, rgb(var(--aura-panel) / 0.72), rgb(var(--aura-panel-soft) / 0.44)),
+      linear-gradient(135deg, rgba(255, 255, 255, 0.075), transparent 38%);
+    box-shadow:
+      0 22px 70px rgba(0, 0, 0, 0.2),
+      inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(18px) saturate(1.2);
+  }
+
+  .aura-control-shell {
+    border: 1px solid rgb(var(--aura-border) / 0.12);
+    background:
+      linear-gradient(180deg, rgb(var(--aura-panel-soft) / 0.64), rgb(var(--aura-panel) / 0.38));
+    box-shadow:
+      0 10px 28px rgba(0, 0, 0, 0.14),
+      inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(14px) saturate(1.15);
+  }
+
+  .aura-tactile-button {
+    background:
+      linear-gradient(180deg, rgb(var(--aura-text)), rgb(var(--aura-text) / 0.82));
+    box-shadow:
+      0 14px 34px rgba(0, 0, 0, 0.22),
+      inset 0 1px 0 rgba(255, 255, 255, 0.75),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.18);
+    transition:
+      transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .aura-tactile-button:hover {
+    transform: translateY(-1px);
+    box-shadow:
+      0 18px 42px rgba(0, 0, 0, 0.26),
+      0 0 28px rgba(91, 173, 190, 0.1),
+      inset 0 1px 0 rgba(255, 255, 255, 0.8),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+  }
+
+  .aura-transcript-surface {
+    border: 1px solid rgb(var(--aura-border) / 0.12);
+    background:
+      radial-gradient(circle at 84% 0%, rgb(var(--aura-reveal) / 0.12), transparent 36%),
+      linear-gradient(180deg, rgb(var(--aura-surface) / 0.92), rgb(var(--aura-bg) / 0.96));
+    box-shadow:
+      0 34px 110px rgba(0, 0, 0, 0.34),
+      inset 0 1px 0 rgba(255, 255, 255, 0.09),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+  }
+
+  .theme-light .aura-transcript-surface {
+    box-shadow:
+      0 22px 70px rgba(78, 87, 112, 0.14),
+      inset 0 1px 0 rgba(255, 255, 255, 0.85),
+      inset 0 -1px 0 rgba(78, 87, 112, 0.08);
+  }
+
+  .aura-waveform-stage {
+    position: relative;
+    background:
+      radial-gradient(circle at 45% 10%, rgb(var(--aura-reveal) / 0.18), transparent 32%),
+      radial-gradient(circle at 70% 85%, rgb(var(--aura-accent) / 0.14), transparent 36%),
+      linear-gradient(180deg, rgb(var(--aura-surface) / 0.98), rgb(var(--aura-bg) / 1));
+    box-shadow:
+      0 42px 120px rgba(0, 0, 0, 0.34),
+      inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  }
+
+  .theme-light .aura-waveform-stage {
+    box-shadow:
+      0 28px 90px rgba(78, 87, 112, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  }
+
+  .aura-waveform-stage::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(90deg, rgb(var(--aura-border) / 0.08) 1px, transparent 1px),
+      linear-gradient(180deg, rgb(var(--aura-border) / 0.06) 1px, transparent 1px);
+    background-size: 48px 48px;
+    mask-image: linear-gradient(180deg, transparent, black 10%, black 90%, transparent);
+  }
+
+  .aura-waveform-stage::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgb(var(--aura-reveal) / 0.12), transparent);
+    transform: translateX(-100%);
+    animation: aura-scan 6s linear infinite;
+  }
+
+  .aura-instrument-panel {
+    border-top: 1px solid rgb(var(--aura-border) / 0.1);
+    border-bottom: 1px solid rgb(var(--aura-border) / 0.1);
+    background:
+      linear-gradient(180deg, rgb(var(--aura-surface) / 0.36), transparent);
+  }
+
+  .aura-scanline::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.028) 0,
+      rgba(255, 255, 255, 0.028) 1px,
+      transparent 1px,
+      transparent 7px
+    );
+    mix-blend-mode: screen;
+    opacity: 0.35;
+  }
+
+  .theme-light .aura-scanline::after {
+    mix-blend-mode: multiply;
+    opacity: 0.18;
+  }
+
+  .aura-legend-card {
+    border: 1px solid rgb(var(--aura-border) / 0.14);
+    background:
+      linear-gradient(180deg, rgb(var(--aura-panel) / 0.76), rgb(var(--aura-panel-soft) / 0.42)),
+      radial-gradient(circle at 18% 0%, rgb(var(--aura-reveal) / 0.08), transparent 42%);
+    box-shadow:
+      0 18px 54px rgba(0, 0, 0, 0.24),
+      inset 0 1px 0 rgba(255, 255, 255, 0.09);
+    backdrop-filter: blur(16px) saturate(1.2);
+  }
+
+  .theme-light .aura-legend-card {
+    box-shadow:
+      0 18px 54px rgba(78, 87, 112, 0.16),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  }
+
+  .aura-tooltip-card {
+    border: 1px solid rgb(var(--aura-border) / 0.18);
+    background:
+      linear-gradient(180deg, rgb(var(--aura-panel) / 0.82), rgb(var(--aura-panel-soft) / 0.46));
+    box-shadow:
+      0 20px 66px rgba(0, 0, 0, 0.28),
+      inset 0 1px 0 rgba(255, 255, 255, 0.09);
+    backdrop-filter: blur(18px) saturate(1.25);
+  }
+
+  .theme-light .aura-tooltip-card {
+    box-shadow:
+      0 18px 54px rgba(78, 87, 112, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  }
+
+  .aura-chip {
+    border: 1px solid rgb(var(--aura-border) / 0.14);
+    background: linear-gradient(180deg, rgb(var(--aura-panel-soft) / 0.62), rgb(var(--aura-panel) / 0.36));
+    box-shadow:
+      0 12px 32px rgba(0, 0, 0, 0.12),
+      inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(14px) saturate(1.15);
+  }
+
+  .aura-toolbar {
+    border-bottom: 1px solid rgb(var(--aura-border) / 0.1);
+    background: linear-gradient(180deg, rgb(var(--aura-bg) / 0.35), transparent);
+  }
+
+  .theme-light .aura-toolbar {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.25));
+  }
+
+  .aura-toolbar-shell {
+    border: 1px solid rgb(var(--aura-border) / 0.12);
+    background:
+      linear-gradient(180deg, rgb(var(--aura-panel) / 0.62), rgb(var(--aura-panel-soft) / 0.36));
+    box-shadow:
+      0 18px 54px rgba(0, 0, 0, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(14px) saturate(1.15);
+  }
+
+  .theme-light .aura-toolbar-shell {
+    box-shadow:
+      0 16px 44px rgba(78, 87, 112, 0.14),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  }
+
+  .aura-toolbar-chip {
+    border: 1px solid rgb(var(--aura-border) / 0.12);
+    background: rgb(var(--aura-panel) / 0.32);
+  }
+
+  .theme-light .aura-toolbar-chip {
+    background: rgba(255, 255, 255, 0.8);
+  }
+
+  .aura-toolbar-select {
+    border: 1px solid rgb(var(--aura-border) / 0.14);
+    background: rgb(var(--aura-panel) / 0.42);
+    box-shadow: 0 18px 46px rgba(0, 0, 0, 0.12);
+    backdrop-filter: blur(12px) saturate(1.15);
+  }
+
+  .theme-light .aura-toolbar-select {
+    background: rgba(255, 255, 255, 0.86);
+    box-shadow: 0 14px 34px rgba(78, 87, 112, 0.12);
+  }
+
+  .aura-ecc-pulse {
+    transform-origin: center;
+    animation: aura-ecc-pulse 1.65s ease-in-out infinite;
+  }
+
+  @keyframes aura-ecc-pulse {
+    0% {
+      opacity: 0.5;
+    }
+    45% {
+      opacity: 0.98;
+    }
+    100% {
+      opacity: 0.55;
+    }
+  }
+
+  @keyframes aura-scan {
+    0% {
+      transform: translateX(-100%);
+      opacity: 0;
+    }
+    12% {
+      opacity: 0.85;
+    }
+    88% {
+      opacity: 0.85;
+    }
+    100% {
+      transform: translateX(100%);
+      opacity: 0;
+    }
+  }
+
   .aura-steel {
     position: relative;
     isolation: isolate;

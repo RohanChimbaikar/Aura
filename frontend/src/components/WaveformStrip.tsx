@@ -29,9 +29,9 @@ export function WaveformStrip({ tone = 'accent', dense = false }: Props) {
       : 'bg-aura-reveal/80'
 
   return (
-    <div className="relative overflow-hidden rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-4">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,rgba(255,255,255,0.05),transparent_34%)]" />
-      <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-white/[0.03]" />
+    <div className="relative overflow-hidden rounded-[22px] border border-aura-border/10 bg-aura-bg/18 px-4 py-4">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,rgba(255,255,255,0.06),transparent_34%)] opacity-60" />
+      <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-aura-border/10" />
 
       <div
         className={`relative flex items-end ${

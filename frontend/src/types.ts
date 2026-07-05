@@ -1,4 +1,10 @@
-export type NavKey = 'chat' | 'encode' | 'reveal' | 'analysis' | 'settings'
+export type NavKey =
+  | 'chat'
+  | 'encode'
+  | 'reveal'
+  | 'analysis'
+  | 'compare'
+  | 'settings'
 
 export type ScreenFrame = {
   title: string
@@ -172,9 +178,41 @@ export type AnalysisPayload = {
   selectedPartNumber?: number | null
   selectedPartFilename?: string | null
   revealId?: string | null
+  transmissionMetrics?: {
+    syncLock?: string | null
+    syncBer?: number | null
+    uncorrectableCount?: number | null
+    correctedBits?: number | null
+    eccScheme?: number | null
+    codecHint?: number | null
+    payloadCrcOk?: boolean | null
+  } | null
+  segments?: Array<{
+    segment_index: number
+    file_name: string
+    audio_url?: string
+    status: 'decoded' | 'reconstructed' | 'missing' | 'failed'
+    decoded_text?: string
+    error?: string
+    metrics?: {
+      syncLock?: string | null
+      syncBer?: number | null
+      uncorrectableCount?: number | null
+      correctedBits?: number | null
+      eccScheme?: number | null
+      codecHint?: number | null
+      payloadCrcOk?: boolean | null
+    }
+  }>
+  simulation?: {
+    noiseLevel: number
+    clippingLevel: number
+    transcodeType: 'None' | 'MP3' | 'Opus'
+    droppedParts: number[]
+  }
 
   summary: {
-    recoveryStatus: 'verified' | 'recovered_with_corrections' | 'partial' | 'failed'
+    recoveryStatus: 'complete' | 'verified' | 'recovered_with_corrections' | 'partial' | 'failed'
     recoveryConfidence: number
     integrityScore: number
     headerValid: boolean | null
@@ -244,13 +282,33 @@ export type AnalysisPayload = {
       diffImageUrl?: string | null
       selectedPart?: number
       partOptions?: number[]
+      spectrograms?: {
+        cover?: SpectrogramMatrix
+        stego?: SpectrogramMatrix
+        residual?: SpectrogramMatrix
+      }
+      frequencyDelta?: Array<{
+        frequencyHz: number
+        cover: number
+        stego: number
+        delta: number
+        residual: number
+      }>
+      residualAnalysis?: {
+        sampleRate?: number
+        residualWaveform?: Array<{ x: number; y: number }>
+        residualSpectrogram?: SpectrogramMatrix
+      }
     }
     waveformComparison?: {
       available: boolean
       coverWaveform?: Array<{ x: number; y: number }>
       stegoWaveform?: Array<{ x: number; y: number }>
       diffWaveform?: Array<{ x: number; y: number }>
+      differenceWaveform?: Array<{ x: number; y: number }>
     }
+    signalSpectrogram?: SpectrogramMatrix
+    signalWaveform?: Array<{ x: number; y: number }>
   }
 
   chunkTable: Array<{
@@ -311,6 +369,22 @@ export type AnalysisPayload = {
   }
 }
 
+export type SpectrogramMatrix = {
+  timeBins: number
+  freqBins: number
+  sampleRate?: number
+  minFrequencyHz?: number
+  maxFrequencyHz?: number
+  values: number[][]
+}
+
+export type SimulationOptions = {
+  noiseLevel: number
+  clippingLevel: number
+  transcodeType: 'None' | 'MP3' | 'Opus'
+  droppedParts: number[]
+}
+
 export type SelectedAudio = {
   messageId: string
   audioUrl?: string
@@ -325,6 +399,7 @@ export type SelectedAudio = {
   selectedPartNumber?: number
   selectedPartFilename?: string
   revealId?: string
+  simulation?: SimulationOptions
 }
 
 export type User = {
@@ -380,3 +455,7 @@ export type ConversationItem =
     }
 
 export type InboxStatus = 'Verified' | 'Pending Reveal' | 'Encrypted'
+
+export type MetricTone = 'safe' | 'neutral' | 'warning' | 'danger'
+export type PayloadRole = 'header' | 'payload' | 'redundancy' | 'tail' | 'duplicate' | 'unknown'
+

@@ -244,6 +244,9 @@ def analysis_from_target():
         payload.get("totalParts")
         or payload.get("total_parts")
     )
+    simulation = (
+        payload.get("simulation")
+    )
 
     message_id = str(message_id).strip() if message_id is not None else ""
 
@@ -270,6 +273,7 @@ def analysis_from_target():
             audio_url=audio_url,
             file_name=file_name,
             total_parts=total_parts,
+            simulation=simulation,
         )
         return jsonify(result)
 

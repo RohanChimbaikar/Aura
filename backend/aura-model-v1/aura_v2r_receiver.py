@@ -2,6 +2,8 @@ import re
 import json
 import argparse
 import difflib
+import struct
+import time
 
 import torch
 import torch.nn as nn
@@ -25,11 +27,11 @@ import torchaudio
 # ============================================================
 
 # ------------------------------------------------------------
-# LENGTH HEADER SETTINGS
-# 2 bytes => 4 nibbles => repeat-3 => 12 chunks
+# COMPACT HEADER SETTINGS
+# 24 bytes => 48 nibbles
 # ------------------------------------------------------------
-HEADER_BYTES = 2
-HEADER_NIBBLES = HEADER_BYTES * 2  # 4
+HEADER_BYTES = 24
+HEADER_NIBBLES = 48
 
 
 # ============================================================
@@ -117,30 +119,213 @@ def nibble_sequence_to_text(nibbles):
 
 
 # ============================================================
-# LENGTH HEADER HELPERS
+# PROTOCOL, ECC, & ALIGNMENT HELPERS
 # ============================================================
 
-def get_header_chunk_count(repeat_factor):
-    return HEADER_NIBBLES * repeat_factor
+def crc16(data: bytes) -> int:
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            if crc & 1:
+                crc = (crc >> 1) ^ 0xA001
+            else:
+                crc >>= 1
+    return crc & 0xFFFF
 
 
-def header_nibbles_to_length(header_nibbles):
-    """
-    header_nibbles = [b0_hi, b0_lo, b1_hi, b1_lo]
-    big-endian 2-byte unsigned int
-    """
-    if len(header_nibbles) != 4:
-        raise ValueError(f"Expected 4 header nibbles, got {len(header_nibbles)}")
+def hamming_8_4_decode_nibble(hi, lo):
+    b = ((hi & 0x0F) << 4) | (lo & 0x0F)
+    r = [
+        (b >> 7) & 1,  # r1 (p1)
+        (b >> 6) & 1,  # r2 (p2)
+        (b >> 5) & 1,  # r3 (d1)
+        (b >> 4) & 1,  # r4 (p3)
+        (b >> 3) & 1,  # r5 (d2)
+        (b >> 2) & 1,  # r6 (d3)
+        (b >> 1) & 1,  # r7 (d4)
+        b & 1          # r8 (p4)
+    ]
+    
+    s1 = r[0] ^ r[2] ^ r[4] ^ r[6]
+    s2 = r[1] ^ r[2] ^ r[5] ^ r[6]
+    s3 = r[3] ^ r[4] ^ r[5] ^ r[6]
+    
+    syndrome = (s3 << 2) | (s2 << 1) | s1
+    overall_parity = r[0] ^ r[1] ^ r[2] ^ r[3] ^ r[4] ^ r[5] ^ r[6] ^ r[7]
+    
+    corrected = 0
+    uncorrectable = False
+    
+    if syndrome == 0 and overall_parity == 0:
+        pass
+    elif syndrome != 0 and overall_parity == 1:
+        error_pos = syndrome - 1
+        r[error_pos] ^= 1
+        corrected = 1
+    elif syndrome == 0 and overall_parity == 1:
+        corrected = 1
+    else:
+        uncorrectable = True
+        
+    d1, d2, d3, d4 = r[2], r[4], r[5], r[6]
+    decoded_nibble = d1 | (d2 << 1) | (d3 << 2) | (d4 << 3)
+    return decoded_nibble, uncorrectable, corrected
 
-    b0 = nibbles_to_byte(header_nibbles[0], header_nibbles[1])
-    b1 = nibbles_to_byte(header_nibbles[2], header_nibbles[3])
 
-    msg_len = ((b0 & 0xFF) << 8) | (b1 & 0xFF)
-    return msg_len
+def decode_payload_ecc(voted_nibbles, ecc_scheme):
+    payload_bytes = bytearray()
+    uncorrectable_count = 0
+    corrected_bits = 0
+    
+    if ecc_scheme == 1:
+        num_chars = len(voted_nibbles) // 4
+        for i in range(num_chars):
+            hi_hi = voted_nibbles[i * 4]
+            hi_lo = voted_nibbles[i * 4 + 1]
+            lo_hi = voted_nibbles[i * 4 + 2]
+            lo_lo = voted_nibbles[i * 4 + 3]
+            
+            decoded_hi, unc_hi, corr_hi = hamming_8_4_decode_nibble(hi_hi, hi_lo)
+            decoded_lo, unc_lo, corr_lo = hamming_8_4_decode_nibble(lo_hi, lo_lo)
+            
+            if unc_hi or unc_lo:
+                uncorrectable_count += 1
+            corrected_bits += corr_hi + corr_lo
+            
+            char_byte = ((decoded_hi & 0x0F) << 4) | (decoded_lo & 0x0F)
+            payload_bytes.append(char_byte)
+    else:
+        num_chars = len(voted_nibbles) // 2
+        for i in range(num_chars):
+            hi = voted_nibbles[i * 2]
+            lo = voted_nibbles[i * 2 + 1]
+            char_byte = ((hi & 0x0F) << 4) | (lo & 0x0F)
+            payload_bytes.append(char_byte)
+            
+    return bytes(payload_bytes), uncorrectable_count, corrected_bits
 
 
-def get_payload_chunk_count_for_chars(msg_len, cfg):
-    return msg_len * cfg["chunks_per_char_protected"]
+def _unpack_header_bytes(header_bytes):
+    magic, version, tx_id, part_index, total_parts, payload_len, crc_payload, chunk_count, ecc_scheme, codec_hint, timestamp = struct.unpack(
+        ">4sB I B B H H H B B I",
+        header_bytes[:23]
+    )
+    if magic != b"AURA":
+        raise ValueError(f"Magic header mismatch: expected AURA, got {magic}")
+    return {
+        "tx_id": tx_id,
+        "part_index": part_index,
+        "total_parts": total_parts,
+        "payload_len": payload_len,
+        "crc_payload": crc_payload,
+        "chunk_count": chunk_count,
+        "ecc_scheme": ecc_scheme,
+        "codec_hint": codec_hint,
+        "timestamp": timestamp,
+        "checksum_ok": True
+    }
+
+
+def unpack_header(header_voted_nibbles):
+    if len(header_voted_nibbles) != 48:
+        raise ValueError(f"Expected 48 header nibbles, got {len(header_voted_nibbles)}")
+        
+    header_bytes = bytearray()
+    for i in range(0, 48, 2):
+        hi = header_voted_nibbles[i]
+        lo = header_voted_nibbles[i+1]
+        header_bytes.append(((hi & 0x0F) << 4) | (lo & 0x0F))
+        
+    header_bytes = bytes(header_bytes)
+    
+    # 1. Try direct unpack
+    header_checksum_received = header_bytes[23]
+    header_checksum_calculated = sum(header_bytes[:23]) % 256
+    if header_checksum_received == header_checksum_calculated:
+        try:
+            return _unpack_header_bytes(header_bytes)
+        except ValueError:
+            pass
+            
+    # 2. Try single-bit flip correction across all 24 bytes (192 bits)
+    candidates = []
+    for bit_idx in range(192):
+        byte_idx = bit_idx // 8
+        bit_pos = bit_idx % 8
+        
+        candidate_bytes = bytearray(header_bytes)
+        candidate_bytes[byte_idx] ^= (1 << bit_pos)
+        candidate_bytes = bytes(candidate_bytes)
+        
+        chk_rec = candidate_bytes[23]
+        chk_calc = sum(candidate_bytes[:23]) % 256
+        if chk_rec == chk_calc:
+            try:
+                info = _unpack_header_bytes(candidate_bytes)
+                candidates.append((candidate_bytes, info, byte_idx, bit_pos))
+            except ValueError:
+                pass
+                
+    if len(candidates) >= 1:
+        corrected_bytes, info, corr_byte, corr_bit = candidates[0]
+        print(f"[header] Warning: corrected single-bit flip in header at byte {corr_byte}, bit {corr_bit}!")
+        return info
+        
+    raise ValueError(f"Header checksum mismatch: calculated {header_checksum_calculated}, received {header_checksum_received}")
+
+
+def find_alignment(decoder, wav, cfg, device):
+    sync_pattern = [10, 10, 4, 1, 5, 5, 5, 2, 4, 1, 10, 10]
+    best_offset = 0
+    best_shift = 0
+    min_ber = 1.0
+    best_pred_nibbles = []
+
+    chunk_samples = cfg["chunk_samples"]
+    step = chunk_samples // 20  # 1600 samples = 0.1s
+    
+    # We will decode up to 14 chunks starting at each offset
+    max_test_chunks = 14
+    
+    for offset in range(0, chunk_samples, step):
+        if wav.size(1) - offset < max_test_chunks * chunk_samples:
+            num_test_chunks = (wav.size(1) - offset) // chunk_samples
+            if num_test_chunks < 8:
+                continue
+        else:
+            num_test_chunks = max_test_chunks
+            
+        test_wav = wav[:, offset:offset + num_test_chunks * chunk_samples]
+        test_chunks = chunk_audio_tensor(test_wav, chunk_samples)
+        
+        pred_nibbles = []
+        for i in range(test_chunks.size(0)):
+            n = decode_single_chunk_to_nibble(decoder, test_chunks[i:i+1], cfg, device)
+            pred_nibbles.append(n)
+            
+        for shift in [-2, -1, 0, 1, 2]:
+            total_bits = 0
+            bit_errors = 0
+            for i in range(len(pred_nibbles)):
+                orig_idx = i + shift
+                if 0 <= orig_idx < 12:
+                    p_bits = nibble_to_bits4(pred_nibbles[i])
+                    e_bits = nibble_to_bits4(sync_pattern[orig_idx])
+                    bit_errors += sum(p ^ e for p, e in zip(p_bits, e_bits))
+                    total_bits += 4
+            if total_bits > 0:
+                ber = bit_errors / total_bits
+                if ber < min_ber:
+                    min_ber = ber
+                    best_offset = offset
+                    best_shift = shift
+                    best_pred_nibbles = pred_nibbles
+                    
+        if min_ber == 0.0:
+            break
+            
+    return best_offset, best_shift, min_ber
 
 
 # ============================================================
@@ -452,80 +637,120 @@ def main():
     decoder.eval()
 
     wav, _ = load_audio_mono_16k_for_decode(args.stego, target_sr=cfg["sample_rate"])
-    chunks = chunk_audio_tensor(wav, cfg["chunk_samples"])
+    
+    # Run time-domain alignment search
+    best_offset, best_shift, min_ber = find_alignment(decoder, wav, cfg, device)
+    
+    # Slice wav starting at best_offset
+    aligned_wav = wav[:, best_offset:]
+    chunks = chunk_audio_tensor(aligned_wav, cfg["chunk_samples"])
 
     if chunks.size(0) == 0:
         raise RuntimeError("Stego file is too short or empty after chunking.")
 
-    total_chunks = chunks.size(0)
-    header_chunks = get_header_chunk_count(cfg["repeat_factor"])
-
-    if total_chunks < header_chunks:
+    # In our chunks list, the header starts at 12 - best_shift
+    header_start = 12 - best_shift
+    if header_start < 0:
+        raise RuntimeError(f"Sync shift {best_shift} is too large, header starts at negative index {header_start}")
+        
+    repeat_factor = cfg.get("repeat_factor", 3)
+    header_chunks_needed = 48 * repeat_factor
+    header_block = chunks[header_start : header_start + header_chunks_needed]
+    if header_block.size(0) < header_chunks_needed:
         raise RuntimeError(
-            f"Stego file too short for header decode. "
-            f"Need at least {header_chunks} chunks, got {total_chunks}."
+            f"Stego file too short to decode header.\n"
+            f"Expected {header_chunks_needed} header chunks at start index {header_start}, got {header_block.size(0)}."
         )
 
-    # --------------------------------------------------------
-    # 1) Decode header first
-    # --------------------------------------------------------
-    header_block = chunks[:header_chunks]
-    header_pred_chunk_nibbles, header_voted_nibbles = decode_nibbles_from_chunk_block(
-        decoder, header_block, cfg, device
+    # Decode header chunks
+    header_pred_chunk_nibbles = []
+    for i in range(header_chunks_needed):
+        n = decode_single_chunk_to_nibble(decoder, header_block[i:i+1], cfg, device)
+        header_pred_chunk_nibbles.append(n)
+
+    # Majority vote on header nibbles
+    header_voted_nibbles = majority_vote_repeated_nibbles(
+        header_pred_chunk_nibbles,
+        repeat_factor=repeat_factor
     )
 
-    if len(header_voted_nibbles) != HEADER_NIBBLES:
-        raise RuntimeError(
-            f"Header decode produced {len(header_voted_nibbles)} nibbles, expected {HEADER_NIBBLES}."
-        )
+    # Unpack the header
+    header_info = unpack_header(header_voted_nibbles)
 
-    msg_len = header_nibbles_to_length(header_voted_nibbles)
+    # Compute exact payload size
+    payload_len = header_info["payload_len"]
+    if header_info["ecc_scheme"] == 1:
+        payload_nibbles_count = payload_len * 4
+    else:
+        payload_nibbles_count = payload_len * 2
+        
+    payload_chunks_needed = payload_nibbles_count * repeat_factor
+    total_needed_chunks = 12 + header_chunks_needed + payload_chunks_needed + 12
 
-    # --------------------------------------------------------
-    # 2) Compute exact payload size from header
-    # --------------------------------------------------------
-    payload_chunks_needed = get_payload_chunk_count_for_chars(msg_len, cfg)
-    total_needed_chunks = header_chunks + payload_chunks_needed
-
-    if total_chunks < total_needed_chunks:
+    payload_start = 12 + header_chunks_needed - best_shift
+    if payload_start < 0:
+        raise RuntimeError(f"Sync shift {best_shift} is too large, payload starts at negative index {payload_start}")
+        
+    payload_block = chunks[payload_start : payload_start + payload_chunks_needed]
+    if payload_block.size(0) < payload_chunks_needed:
         raise RuntimeError(
             f"Stego file shorter than declared payload length.\n"
-            f"Header says msg_len={msg_len} chars => need {total_needed_chunks} total chunks\n"
-            f"But file only has {total_chunks} chunks."
+            f"Header says payload needs {payload_chunks_needed} chunks at start index {payload_start}\n"
+            f"But only {payload_block.size(0)} chunks are available."
         )
 
-    # --------------------------------------------------------
-    # 3) Decode only the exact payload block
-    # --------------------------------------------------------
-    payload_block = chunks[header_chunks:header_chunks + payload_chunks_needed]
-    payload_pred_chunk_nibbles, payload_voted_nibbles = decode_nibbles_from_chunk_block(
-        decoder, payload_block, cfg, device
+    # Decode payload block
+    payload_pred_chunk_nibbles = []
+    for i in range(payload_chunks_needed):
+        n = decode_single_chunk_to_nibble(decoder, payload_block[i:i+1], cfg, device)
+        payload_pred_chunk_nibbles.append(n)
+
+    # Majority vote
+    payload_voted_nibbles = majority_vote_repeated_nibbles(
+        payload_pred_chunk_nibbles,
+        repeat_factor=repeat_factor
     )
 
-    # payload_voted_nibbles should be 2 * msg_len
-    expected_payload_nibbles = msg_len * 2
-    if len(payload_voted_nibbles) != expected_payload_nibbles:
-        raise RuntimeError(
-            f"Payload decode produced {len(payload_voted_nibbles)} nibbles, "
-            f"expected {expected_payload_nibbles}."
-        )
+    # ECC decoding
+    payload_bytes, uncorrectable_count, corrected_bits = decode_payload_ecc(
+        payload_voted_nibbles,
+        header_info["ecc_scheme"]
+    )
 
-    raw_text = nibble_sequence_to_text(payload_voted_nibbles)
+    # Check payload CRC
+    calculated_crc = crc16(payload_bytes)
+    crc_ok = (calculated_crc == header_info["crc_payload"])
+
+    alignment_offset = (best_offset / cfg["sample_rate"]) - (best_shift * cfg["chunk_seconds"])
+
+    raw_text = payload_bytes.decode("ascii", errors="ignore")
     corrected_text, changes = postprocess_aura_text(raw_text)
 
-    extra_tail_chunks = total_chunks - total_needed_chunks
+    extra_tail_chunks = max(0, chunks.size(0) - (total_needed_chunks - best_shift))
 
     print("=" * 80)
-    print("AURA V2-R RECEIVER (LENGTH-HEADER MODE)")
+    print("AURA V2-R RECEIVER (COVERT PACKET ARCHITECTURE)")
     print("=" * 80)
     print("Stego file            :", args.stego)
-    print("Total chunks in file  :", total_chunks)
-    print("Header chunks         :", header_chunks)
+    print("Total chunks in file  :", chunks.size(0))
+    print("Header chunks         :", header_chunks_needed)
     print("Header voted nibbles  :", len(header_voted_nibbles))
-    print("Decoded msg length    :", msg_len, "chars")
+    print("Decoded msg length    :", payload_len, "chars")
     print("Payload chunks needed :", payload_chunks_needed)
     print("Total needed chunks   :", total_needed_chunks)
     print("Ignored tail chunks   :", extra_tail_chunks)
+    print("Transmission ID       :", header_info["tx_id"])
+    print("Part Index            :", header_info["part_index"])
+    print("Total Parts           :", header_info["total_parts"])
+    print("ECC Scheme            :", header_info["ecc_scheme"])
+    print("Codec Hint            :", header_info["codec_hint"])
+    print("Payload CRC           :", header_info["crc_payload"])
+    print("Payload CRC OK        :", "Pass" if crc_ok else "Fail")
+    print("Uncorrectable Count   :", uncorrectable_count)
+    print("Corrected Bits        :", corrected_bits)
+    print("Sync Lock             :", f"Aligned ({alignment_offset:+.1f}s)")
+    print("Sync BER              :", f"{min_ber:.4f}")
+    print("Payload Hex           :", payload_bytes.hex())
     print("-" * 80)
 
     print("RAW DECODED TEXT:")
