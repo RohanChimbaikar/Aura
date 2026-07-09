@@ -1,124 +1,319 @@
-import { useState, type FormEvent } from 'react'
-import { LockKeyhole, LogIn, UserRound } from 'lucide-react'
-import { PrimaryActionButton } from '../components/ActionButtons'
-import { SurfacePanel } from '../components/SurfacePanel'
+import { useState, useEffect, type FormEvent } from 'react'
+import { Lock, EyeOff, ShieldCheck, Activity, Code, User, ArrowRight } from 'lucide-react'
+import ColorBends from '../components/ColorBends/ColorBends'
 
-type Props = {
-  onLogin: (username: string, password: string) => Promise<void> | void
-  error: string
+declare global {
+  interface Window {
+    google: any
+  }
 }
 
-export function LoginScreen({ onLogin, error }: Props) {
+type Props = {
+  onLogin: (usernameOrEmail: string, password: string, rememberMe: boolean) => Promise<void> | void
+  onGoogleLogin: (credential: string) => Promise<void> | void
+  onSignUpClick: () => void
+  onForgotPasswordClick: () => void
+  error: string
+  theme?: string
+}
+
+export function LoginScreen({
+  onLogin,
+  onGoogleLogin,
+  onSignUpClick,
+  onForgotPasswordClick,
+  error,
+}: Props) {
   const [username, setUsername] = useState('sender_user')
   const [password, setPassword] = useState('password123')
+  const [rememberMe, setRememberMe] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+
+  // Load Google GIS SDK
+  useEffect(() => {
+    if (!document.getElementById('google-gsi-client')) {
+      const script = document.createElement('script')
+      script.src = 'https://accounts.google.com/gsi/client'
+      script.id = 'google-gsi-client'
+      script.async = true
+      script.defer = true
+      document.body.appendChild(script)
+    }
+  }, [])
+
+  // Render Google Button when SDK is ready
+  useEffect(() => {
+    let active = true
+    const initGoogleBtn = () => {
+      if (!active) return
+      if (window.google) {
+        window.google.accounts.id.initialize({
+          client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID || 'your-google-client-id.apps.googleusercontent.com',
+          callback: (res: any) => {
+            if (res.credential && active) {
+              onGoogleLogin(res.credential)
+            }
+          }
+        })
+        const container = document.getElementById('google-btn-container')
+        if (container) {
+          window.google.accounts.id.renderButton(container, {
+            theme: 'outline',
+            size: 'large',
+            text: 'continue_with',
+            width: container.clientWidth || 360,
+            shape: 'rectangular'
+          })
+        }
+      } else {
+        setTimeout(initGoogleBtn, 150)
+      }
+    }
+    initGoogleBtn()
+    return () => {
+      active = false
+    }
+  }, [onGoogleLogin])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setSubmitting(true)
     try {
-      await onLogin(username, password)
+      await onLogin(username, password, rememberMe)
     } finally {
       setSubmitting(false)
     }
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-aura-bg px-6 py-10 text-aura-text">
-      <div className="pointer-events-none absolute inset-0 bg-noise opacity-55" />
-      <div className="pointer-events-none absolute left-1/2 top-20 h-[360px] w-[360px] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(93,87,255,0.16),transparent_65%)] blur-3xl" />
+    <div className="flex min-h-screen w-full bg-[#F8FAFC] font-sans text-slate-900">
+      
+      {/* Left Panel: Branding & Features (Hidden on mobile) */}
+      <div className="hidden lg:flex w-1/2 relative bg-[#F2F6FE] flex-col p-12 xl:p-20 overflow-hidden border-r border-blue-50/50">
+        
+        {/* INTERACTIVE BACKGROUND */}
+        {/* Placed at the bottom to mimic the original wave, but fills the space and responds to pointer */}
+        <div className="absolute inset-0 z-0 opacity-60">
+          <ColorBends
+            colors={["#A3C6F2", "#4A90E2", "#80B3F7"]} // Aura theme blues
+            rotation={45}
+            speed={0.15}
+            scale={1.2}
+            frequency={1.5}
+            warpStrength={1.5}
+            mouseInfluence={1.2}
+            noise={0.05}
+            parallax={0.3}
+            iterations={2}
+            intensity={1.2}
+            bandWidth={5}
+            transparent={true}
+          />
+        </div>
 
-      <div className="relative mx-auto flex min-h-[calc(100vh-5rem)] max-w-6xl items-center">
-        <div className="grid w-full gap-6 lg:grid-cols-[1.08fr_0.92fr]">
-          <div className="max-w-[560px] py-8">
-            <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-aura-dim">
-              Aura Session Gateway
-            </div>
-            <h1 className="mt-4 text-4xl font-semibold tracking-[-0.05em] text-aura-text lg:text-5xl">
-              Universal neural audio steganography, now with live operator chat.
+        {/* Top/Center Content */}
+        {/* Added pointer-events-none to let the mouse interact with the WebGL canvas underneath */}
+        <div className="relative z-10 flex flex-col items-center flex-1 w-full max-w-md mx-auto pt-8 pointer-events-none">
+          
+          {/* SVG Logo */}
+          <div className="flex flex-col items-center mb-10 w-full">
+            <svg 
+              viewBox="0 0 482 151" 
+              fill="none" 
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-12 sm:h-16 lg:h-20 w-auto text-slate-900 drop-shadow-sm"
+            >
+              <path d="M256.22 2.13796C266.109 1.8234 277.124 2.14193 287.101 2.06072C294.991 1.99651 307.794 1.73319 314.989 2.91607C319.653 3.69899 324.147 5.28037 328.274 7.59066C346.845 18.0448 348.221 48.8323 329.23 59.5844C323.424 62.8726 320.556 63.8536 314.167 65.6013C321.973 77.4405 331.027 88.6118 339.462 100.004C341.719 103.051 344.016 105.927 346.018 109.158C342.606 109.078 339.043 109.171 335.625 109.207C331.433 109.25 330.945 108.256 328.497 105.051C327.395 103.608 326.25 102.068 325.158 100.6L308.792 78.3187C306.838 75.6685 302.818 69.8337 300.77 67.7487L294.755 67.7978L268.441 67.8387C268.702 71.7262 268.523 77.6623 268.517 81.7195C268.454 90.962 268.482 100.205 268.608 109.447C264.806 109.588 260.576 109.125 256.274 109.307C256.088 106.2 256.289 100.911 256.289 97.5765V72.41C256.308 67.4929 256.51 61.8038 256.286 56.9557C266.918 56.6108 277.88 57.0139 288.536 56.8578C297.09 56.7326 305.774 57.5469 314.048 55.2019C317.991 54.1032 321.576 51.988 324.446 49.0679C328.616 44.8812 330.269 40.3713 330.127 34.561C329.564 11.1392 305.786 13.2732 289.877 13.272L256.173 13.3038C256.381 10.2352 256.503 5.1001 256.22 2.13796Z" fill="currentColor"/>
+              <path d="M214.321 2.70644C217.891 2.47963 222.597 2.60465 226.258 2.61739C226.544 6.09005 226.371 9.8993 226.291 13.405L226.499 47.9356C226.602 65.7392 228.479 84.0783 215.426 98.2826C199.134 115.905 165.896 115.724 148.375 99.997C130.171 83.6564 134.9 60.6212 134.338 38.8759C134.029 26.9086 134.718 14.6911 134.263 2.70715C138.167 2.48263 143.042 2.59076 146.961 2.66875C147.324 17.959 146.759 33.7937 146.984 49.1422C147.256 57.5111 146.255 66.3811 147.948 74.5866C152.004 91.8915 163.782 99.8778 180.959 100.223C200.232 101.189 213.378 87.5534 214.097 68.6102C214.417 60.1706 214.284 51.4355 214.264 42.816L214.321 2.70644Z" fill="currentColor"/>
+              <path d="M419.344 2.61691C423.482 2.54577 427.621 2.54508 431.757 2.6148C432.748 4.22561 434.803 8.83548 435.659 10.7975C438.605 17.5559 441.431 24.1801 444.487 30.9025L468.155 82.9607C472.171 91.7678 476.574 101.883 480.81 110.482C476.142 110.171 472.517 110.22 467.912 110.426C466.018 108.399 459.068 91.9012 457.369 88.1005L440.459 50.2751C436.392 41.0549 432.361 31.3706 427.967 22.32L425.336 16.7124C421.84 25.0702 417.927 33.5765 414.292 41.9C408.391 55.7431 402.361 69.5307 396.199 83.2608L388.516 100.902C387.43 103.399 385.539 108.068 384.239 110.258C382.121 110.267 372.632 110.467 371.48 109.774C371.814 107.298 382.87 84.166 384.708 79.9358C393.281 60.4807 401.977 41.0791 410.793 21.7317C411.888 19.2955 418.45 3.81454 419.344 2.61691Z" fill="currentColor"/>
+              <path d="M49.5264 0.591095C53.6417 0.485191 57.8814 0.516043 62.0084 0.501129C69.2921 15.794 76.2595 32.0059 83.2779 47.4922C92.6183 67.7506 101.812 88.0762 110.859 108.467C106.539 108.237 102.213 108.155 97.8881 108.221C96.1254 105.381 94.2584 100.665 92.8418 97.4667C90.0263 91.1854 87.2516 84.8859 84.5189 78.5682L58.2002 19.3074C57.5166 17.5741 56.5914 15.7518 55.7788 14.0614L26.2118 80.7174L18.3172 98.9209C17.2544 101.355 15.4224 106.08 13.9894 108.087L1.00222 108.115C1.87539 106.951 8.97886 90.4693 10.0293 88.0832L37.5967 26.6399C39.1983 23.055 48.1378 2.14816 49.5264 0.591095Z" fill="currentColor"/>
+              <path d="M256.22 2.13796C266.109 1.8234 277.124 2.14193 287.101 2.06072C294.991 1.99651 307.794 1.73319 314.989 2.91607C319.653 3.69899 324.147 5.28037 328.274 7.59066C346.845 18.0448 348.221 48.8323 329.23 59.5844C323.424 62.8726 320.556 63.8536 314.167 65.6013C321.973 77.4405 331.027 88.6118 339.462 100.004C341.719 103.051 344.016 105.927 346.018 109.158C342.606 109.078 339.043 109.171 335.625 109.207C331.433 109.25 330.945 108.256 328.497 105.051C327.395 103.608 326.25 102.068 325.158 100.6L308.792 78.3187C306.838 75.6685 302.818 69.8337 300.77 67.7487L294.755 67.7978L268.441 67.8387C268.702 71.7262 268.523 77.6623 268.517 81.7195C268.454 90.962 268.482 100.205 268.608 109.447C264.806 109.588 260.576 109.125 256.274 109.307C256.088 106.2 256.289 100.911 256.289 97.5765V72.41C256.308 67.4929 256.51 61.8038 256.286 56.9557C266.918 56.6108 277.88 57.0139 288.536 56.8578C297.09 56.7326 305.774 57.5469 314.048 55.2019C317.991 54.1032 321.576 51.988 324.446 49.0679C328.616 44.8812 330.269 40.3713 330.127 34.561C329.564 11.1392 305.786 13.2732 289.877 13.272L256.173 13.3038C256.381 10.2352 256.503 5.1001 256.22 2.13796Z" stroke="currentColor"/>
+              <path d="M214.321 2.70644C217.891 2.47963 222.597 2.60465 226.258 2.61739C226.544 6.09005 226.371 9.8993 226.291 13.405L226.499 47.9356C226.602 65.7392 228.479 84.0783 215.426 98.2826C199.134 115.905 165.896 115.724 148.375 99.997C130.171 83.6564 134.9 60.6212 134.338 38.8759C134.029 26.9086 134.718 14.6911 134.263 2.70715C138.167 2.48263 143.042 2.59076 146.961 2.66875C147.324 17.959 146.759 33.7937 146.984 49.1422C147.256 57.5111 146.255 66.3811 147.948 74.5866C152.004 91.8915 163.782 99.8778 180.959 100.223C200.232 101.189 213.378 87.5534 214.097 68.6102C214.417 60.1706 214.284 51.4355 214.264 42.816L214.321 2.70644Z" stroke="currentColor"/>
+              <path d="M419.344 2.61691C423.482 2.54577 427.621 2.54508 431.757 2.6148C432.748 4.22561 434.803 8.83548 435.659 10.7975C438.605 17.5559 441.431 24.1801 444.487 30.9025L468.155 82.9607C472.171 91.7678 476.574 101.883 480.81 110.482C476.142 110.171 472.517 110.22 467.912 110.426C466.018 108.399 459.068 91.9012 457.369 88.1005L440.459 50.2751C436.392 41.0549 432.361 31.3706 427.967 22.32L425.336 16.7124C421.84 25.0702 417.927 33.5765 414.292 41.9C408.391 55.7431 402.361 69.5307 396.199 83.2608L388.516 100.902C387.43 103.399 385.539 108.068 384.239 110.258C382.121 110.267 372.632 110.467 371.48 109.774C371.814 107.298 382.87 84.166 384.708 79.9358C393.281 60.4807 401.977 41.0791 410.793 21.7317C411.888 19.2955 418.45 3.81454 419.344 2.61691Z" stroke="currentColor"/>
+              <path d="M49.5264 0.591095C53.6417 0.485191 57.8814 0.516043 62.0084 0.501129C69.2921 15.794 76.2595 32.0059 83.2779 47.4922C92.6183 67.7506 101.812 88.0762 110.859 108.467C106.539 108.237 102.213 108.155 97.8881 108.221C96.1254 105.381 94.2584 100.665 92.8418 97.4667C90.0263 91.1854 87.2516 84.8859 84.5189 78.5682L58.2002 19.3074C57.5166 17.5741 56.5914 15.7518 55.7788 14.0614L26.2118 80.7174L18.3172 98.9209C17.2544 101.355 15.4224 106.08 13.9894 108.087L1.00222 108.115C1.87539 106.951 8.97886 90.4693 10.0293 88.0832L37.5967 26.6399C39.1983 23.055 48.1378 2.14816 49.5264 0.591095Z" stroke="currentColor"/>
+              <path d="M106.002 150.748V134.648H116.766V135.706H107.175V149.69H117.111V150.748H106.002ZM107.037 143.089V142.054H115.754V143.089H107.037ZM124.838 150.748V134.648H125.827L137.304 149.299H136.775V134.648H137.948V150.748H136.982L125.482 136.097H126.011V150.748H124.838ZM153.828 150.863C152.632 150.863 151.521 150.663 150.493 150.265C149.481 149.851 148.6 149.276 147.848 148.54C147.097 147.804 146.514 146.945 146.1 145.964C145.686 144.967 145.479 143.878 145.479 142.698C145.479 141.517 145.686 140.436 146.1 139.455C146.514 138.458 147.097 137.592 147.848 136.856C148.615 136.12 149.504 135.552 150.516 135.154C151.528 134.74 152.632 134.533 153.828 134.533C154.963 134.533 156.021 134.717 157.002 135.085C157.999 135.453 158.85 136.012 159.555 136.764L158.819 137.523C158.129 136.848 157.363 136.365 156.519 136.074C155.691 135.767 154.81 135.614 153.874 135.614C152.847 135.614 151.889 135.79 150.999 136.143C150.125 136.495 149.359 136.994 148.699 137.638C148.055 138.282 147.549 139.033 147.181 139.892C146.829 140.75 146.652 141.686 146.652 142.698C146.652 143.71 146.829 144.645 147.181 145.504C147.549 146.362 148.055 147.114 148.699 147.758C149.359 148.402 150.125 148.9 150.999 149.253C151.889 149.605 152.847 149.782 153.874 149.782C154.81 149.782 155.691 149.636 156.519 149.345C157.363 149.038 158.129 148.54 158.819 147.85L159.555 148.609C158.85 149.36 157.999 149.927 157.002 150.311C156.021 150.679 154.963 150.863 153.828 150.863ZM172.732 150.863C171.536 150.863 170.424 150.663 169.397 150.265C168.385 149.851 167.496 149.276 166.729 148.54C165.978 147.788 165.395 146.922 164.981 145.941C164.567 144.944 164.36 143.863 164.36 142.698C164.36 141.532 164.567 140.459 164.981 139.478C165.395 138.481 165.978 137.615 166.729 136.879C167.496 136.127 168.385 135.552 169.397 135.154C170.424 134.74 171.536 134.533 172.732 134.533C173.928 134.533 175.032 134.74 176.044 135.154C177.071 135.552 177.961 136.12 178.712 136.856C179.463 137.592 180.046 138.458 180.46 139.455C180.889 140.436 181.104 141.517 181.104 142.698C181.104 143.878 180.889 144.967 180.46 145.964C180.046 146.945 179.463 147.804 178.712 148.54C177.961 149.276 177.071 149.851 176.044 150.265C175.032 150.663 173.928 150.863 172.732 150.863ZM172.732 149.782C173.759 149.782 174.71 149.605 175.584 149.253C176.458 148.9 177.217 148.402 177.861 147.758C178.505 147.114 179.003 146.362 179.356 145.504C179.724 144.645 179.908 143.71 179.908 142.698C179.908 141.67 179.724 140.735 179.356 139.892C179.003 139.033 178.505 138.282 177.861 137.638C177.217 136.994 176.458 136.495 175.584 136.143C174.71 135.79 173.759 135.614 172.732 135.614C171.705 135.614 170.754 135.79 169.88 136.143C169.006 136.495 168.239 136.994 167.58 137.638C166.936 138.282 166.43 139.033 166.062 139.892C165.709 140.735 165.533 141.67 165.533 142.698C165.533 143.71 165.709 144.645 166.062 145.504C166.43 146.362 166.936 147.114 167.58 147.758C168.239 148.402 169.006 148.9 169.88 149.253C170.754 149.605 171.705 149.782 172.732 149.782ZM188.623 150.748V134.648H194.994C196.696 134.648 198.191 134.993 199.479 135.683C200.767 136.373 201.763 137.323 202.469 138.535C203.189 139.746 203.55 141.134 203.55 142.698C203.55 144.262 203.189 145.649 202.469 146.861C201.763 148.072 200.767 149.023 199.479 149.713C198.191 150.403 196.696 150.748 194.994 150.748H188.623ZM189.796 149.69H194.902C196.42 149.69 197.738 149.391 198.858 148.793C199.977 148.195 200.843 147.374 201.457 146.332C202.07 145.274 202.377 144.062 202.377 142.698C202.377 141.333 202.07 140.129 201.457 139.087C200.843 138.029 199.977 137.201 198.858 136.603C197.738 136.005 196.42 135.706 194.902 135.706H189.796V149.69ZM211.075 150.748V134.648H221.839V135.706H212.248V149.69H222.184V150.748H211.075ZM212.11 143.089V142.054H220.827V143.089H212.11ZM229.91 150.748V134.648H236.281C237.983 134.648 239.478 134.993 240.766 135.683C242.054 136.373 243.051 137.323 243.756 138.535C244.477 139.746 244.837 141.134 244.837 142.698C244.837 144.262 244.477 145.649 243.756 146.861C243.051 148.072 242.054 149.023 240.766 149.713C239.478 150.403 237.983 150.748 236.281 150.748H229.91ZM231.083 149.69H236.189C237.707 149.69 239.026 149.391 240.145 148.793C241.265 148.195 242.131 147.374 242.744 146.332C243.358 145.274 243.664 144.062 243.664 142.698C243.664 141.333 243.358 140.129 242.744 139.087C242.131 138.029 241.265 137.201 240.145 136.603C239.026 136.005 237.707 135.706 236.189 135.706H231.083V149.69ZM261.719 150.748V134.648H262.892V150.748H261.719ZM271.953 150.748V134.648H272.942L284.419 149.299H283.89V134.648H285.063V150.748H284.097L272.597 136.097H273.126V150.748H271.953ZM307.724 150.863C306.528 150.863 305.394 150.663 304.32 150.265C303.262 149.851 302.442 149.322 301.859 148.678L302.388 147.804C302.94 148.371 303.692 148.854 304.642 149.253C305.608 149.636 306.628 149.828 307.701 149.828C308.775 149.828 309.649 149.69 310.323 149.414C311.013 149.122 311.519 148.739 311.841 148.264C312.179 147.788 312.347 147.259 312.347 146.677C312.347 145.987 312.163 145.435 311.795 145.021C311.427 144.607 310.944 144.277 310.346 144.032C309.748 143.786 309.097 143.579 308.391 143.411C307.686 143.242 306.973 143.066 306.252 142.882C305.532 142.682 304.872 142.429 304.274 142.123C303.676 141.816 303.193 141.402 302.825 140.881C302.473 140.344 302.296 139.654 302.296 138.811C302.296 138.044 302.496 137.339 302.894 136.695C303.293 136.051 303.914 135.529 304.757 135.131C305.601 134.732 306.682 134.533 308 134.533C308.89 134.533 309.764 134.663 310.622 134.924C311.496 135.184 312.24 135.537 312.853 135.982L312.416 136.925C311.742 136.465 311.013 136.127 310.231 135.913C309.465 135.683 308.721 135.568 308 135.568C306.973 135.568 306.122 135.713 305.447 136.005C304.773 136.296 304.274 136.687 303.952 137.178C303.63 137.653 303.469 138.19 303.469 138.788C303.469 139.478 303.646 140.03 303.998 140.444C304.366 140.858 304.849 141.187 305.447 141.433C306.045 141.678 306.705 141.885 307.425 142.054C308.146 142.222 308.859 142.406 309.564 142.606C310.27 142.79 310.921 143.035 311.519 143.342C312.117 143.648 312.6 144.062 312.968 144.584C313.336 145.105 313.52 145.78 313.52 146.608C313.52 147.359 313.313 148.064 312.899 148.724C312.485 149.368 311.849 149.889 310.99 150.288C310.147 150.671 309.058 150.863 307.724 150.863ZM327.789 150.863C326.593 150.863 325.481 150.663 324.454 150.265C323.442 149.851 322.553 149.276 321.786 148.54C321.035 147.788 320.452 146.922 320.038 145.941C319.624 144.944 319.417 143.863 319.417 142.698C319.417 141.532 319.624 140.459 320.038 139.478C320.452 138.481 321.035 137.615 321.786 136.879C322.553 136.127 323.442 135.552 324.454 135.154C325.481 134.74 326.593 134.533 327.789 134.533C328.985 134.533 330.089 134.74 331.101 135.154C332.128 135.552 333.018 136.12 333.769 136.856C334.52 137.592 335.103 138.458 335.517 139.455C335.946 140.436 336.161 141.517 336.161 142.698C336.161 143.878 335.946 144.967 335.517 145.964C335.103 146.945 334.52 147.804 333.769 148.54C333.018 149.276 332.128 149.851 331.101 150.265C330.089 150.663 328.985 150.863 327.789 150.863ZM327.789 149.782C328.816 149.782 329.767 149.605 330.641 149.253C331.515 148.9 332.274 148.402 332.918 147.758C333.562 147.114 334.06 146.362 334.413 145.504C334.781 144.645 334.965 143.71 334.965 142.698C334.965 141.67 334.781 140.735 334.413 139.892C334.06 139.033 333.562 138.282 332.918 137.638C332.274 136.994 331.515 136.495 330.641 136.143C329.767 135.79 328.816 135.614 327.789 135.614C326.762 135.614 325.811 135.79 324.937 136.143C324.063 136.495 323.296 136.994 322.637 137.638C321.993 138.282 321.487 139.033 321.119 139.892C320.766 140.735 320.59 141.67 320.59 142.698C320.59 143.71 320.766 144.645 321.119 145.504C321.487 146.362 321.993 147.114 322.637 147.758C323.296 148.402 324.063 148.9 324.937 149.253C325.811 149.605 326.762 149.782 327.789 149.782ZM349.981 150.863C347.988 150.863 346.416 150.28 345.266 149.115C344.116 147.949 343.541 146.217 343.541 143.917V134.648H344.714V143.871C344.714 145.879 345.174 147.367 346.094 148.333C347.014 149.299 348.318 149.782 350.004 149.782C351.676 149.782 352.971 149.299 353.891 148.333C354.811 147.367 355.271 145.879 355.271 143.871V134.648H356.444V143.917C356.444 146.217 355.869 147.949 354.719 149.115C353.569 150.28 351.99 150.863 349.981 150.863ZM365.368 150.748V134.648H366.357L377.834 149.299H377.305V134.648H378.478V150.748H377.512L366.012 136.097H366.541V150.748H365.368ZM387.55 150.748V134.648H393.921C395.623 134.648 397.118 134.993 398.406 135.683C399.694 136.373 400.691 137.323 401.396 138.535C402.117 139.746 402.477 141.134 402.477 142.698C402.477 144.262 402.117 145.649 401.396 146.861C400.691 148.072 399.694 149.023 398.406 149.713C397.118 150.403 395.623 150.748 393.921 150.748H387.55ZM388.723 149.69H393.829C395.347 149.69 396.666 149.391 397.785 148.793C398.904 148.195 399.771 147.374 400.384 146.332C400.997 145.274 401.304 144.062 401.304 142.698C401.304 141.333 400.997 140.129 400.384 139.087C399.771 138.029 398.904 137.201 397.785 136.603C396.666 136.005 395.347 135.706 393.829 135.706H388.723V149.69Z" fill="currentColor"/>
+            </svg>
+            <div className="h-[2px] w-8 bg-[#4A90E2] rounded-full mt-6" />
+          </div>
+
+          {/* Main Copy */}
+          <div className="text-center mb-12 w-full">
+            <h1 className="text-3xl font-semibold text-slate-900 mb-4 tracking-tight">
+              Secure. Hidden. Intelligent.
             </h1>
-            <p className="mt-5 max-w-[520px] text-[15px] leading-7 text-aura-muted">
-              Sign in to open the communication layer around your fixed Aura model.
-              Text updates are realtime, while stego WAV transfer stays on secure HTTP
-              upload and download endpoints.
+            <p className="text-slate-600 leading-relaxed text-[15px]">
+              Aura embeds hidden text inside speech audio using advanced neural networks for secure, reliable and undetectable communication.
             </p>
+          </div>
 
-            <div className="mt-8 grid gap-3 sm:grid-cols-2">
-              <div className="rounded-[24px] border border-white/8 bg-white/[0.03] p-5">
-                <div className="text-sm font-medium text-aura-text">Demo sender</div>
-                <div className="mt-2 font-mono text-sm text-aura-muted">
-                  sender_user / password123
-                </div>
+          {/* Feature List */}
+          <div className="space-y-7 w-full pl-4">
+            <div className="flex items-start gap-4">
+              <div className="p-2.5 bg-white/60 text-blue-600 rounded-[14px] backdrop-blur-sm border border-white/40 shadow-sm">
+                <ShieldCheck size={22} strokeWidth={1.5} />
               </div>
-              <div className="rounded-[24px] border border-white/8 bg-white/[0.03] p-5">
-                <div className="text-sm font-medium text-aura-text">Demo receiver</div>
-                <div className="mt-2 font-mono text-sm text-aura-muted">
-                  receiver_user / password123
-                </div>
+              <div className="text-left pt-0.5">
+                <h3 className="text-[15px] font-medium text-slate-900 mb-0.5">Secure by Design</h3>
+                <p className="text-sm text-slate-600">End-to-end protection for your data.</p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-4">
+              <div className="p-2.5 bg-white/60 text-blue-600 rounded-[14px] backdrop-blur-sm border border-white/40 shadow-sm">
+                <Activity size={22} strokeWidth={1.5} />
+              </div>
+              <div className="text-left pt-0.5">
+                <h3 className="text-[15px] font-medium text-slate-900 mb-0.5">Neural Precision</h3>
+                <p className="text-sm text-slate-600">State-of-the-art models for exact recovery.</p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-4">
+              <div className="p-2.5 bg-white/60 text-blue-600 rounded-[14px] backdrop-blur-sm border border-white/40 shadow-sm">
+                <Lock size={22} strokeWidth={1.5} />
+              </div>
+              <div className="text-left pt-0.5">
+                <h3 className="text-[15px] font-medium text-slate-900 mb-0.5">Private & Local-First</h3>
+                <p className="text-sm text-slate-600">Your data stays yours. Always.</p>
               </div>
             </div>
           </div>
+        </div>
 
-          <SurfacePanel className="self-center p-6 lg:p-7">
+        {/* Left Panel Footer */}
+        <div className="relative z-10 w-full max-w-md mx-auto text-xs text-slate-500 font-medium pt-12 pointer-events-none">
+          © 2025 Aura Project • All rights reserved.
+        </div>
+      </div>
+
+      {/* Right Panel: Login Form */}
+      <div className="w-full lg:w-1/2 flex flex-col relative bg-white lg:bg-transparent">
+        <div className="flex-1 flex items-center justify-center p-6 sm:p-12">
+          
+          <div className="w-full max-w-[440px] bg-white lg:rounded-3xl lg:shadow-[0_8px_40px_rgb(0,0,0,0.06)] lg:border border-slate-100 p-2 sm:p-10 z-10">
+            <div className="mb-8">
+              <h2 className="text-3xl font-semibold text-slate-900 tracking-tight">Welcome back</h2>
+              <p className="text-[15px] text-slate-500 mt-2">Sign in to your Aura operator account</p>
+            </div>
+
             <form className="space-y-5" onSubmit={handleSubmit}>
+              
+              {/* Username/Email Input */}
               <div>
-                <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-aura-dim">
-                  Login
-                </div>
-                <div className="mt-2 text-[22px] font-medium text-aura-text">
-                  Enter secure workspace
+                <label className="block text-sm font-medium text-slate-900 mb-2">
+                  Email or Username
+                </label>
+                <div className="relative flex items-center group">
+                  <div className="absolute left-4 text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                    <User size={18} strokeWidth={1.5} />
+                  </div>
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-[12px] focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-[15px] text-slate-900 placeholder:text-slate-400 transition-all outline-none"
+                    placeholder="Enter your email or username"
+                    required
+                  />
                 </div>
               </div>
 
-              <label className="block">
-                <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.18em] text-aura-dim">
-                  Username
-                </div>
-                <div className="flex items-center gap-3 rounded-[22px] border border-aura-border/18 bg-aura-surface/40 px-4 py-3">
-                  <UserRound size={16} className="text-aura-dim" />
-                  <input
-                    value={username}
-                    onChange={(event) => setUsername(event.target.value)}
-                    className="w-full border-none bg-transparent text-sm text-aura-text outline-none placeholder:text-aura-dim"
-                    placeholder="sender_user"
-                  />
-                </div>
-              </label>
-
-              <label className="block">
-                <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.18em] text-aura-dim">
+              {/* Password Input */}
+              <div>
+                <label className="block text-sm font-medium text-slate-900 mb-2">
                   Password
-                </div>
-                <div className="flex items-center gap-3 rounded-[22px] border border-aura-border/18 bg-aura-surface/40 px-4 py-3">
-                  <LockKeyhole size={16} className="text-aura-dim" />
+                </label>
+                <div className="relative flex items-center group">
+                  <div className="absolute left-4 text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                    <Lock size={18} strokeWidth={1.5} />
+                  </div>
                   <input
                     type="password"
                     value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    className="w-full border-none bg-transparent text-sm text-aura-text outline-none placeholder:text-aura-dim"
-                    placeholder="password123"
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full pl-12 pr-12 py-3 bg-white border border-slate-200 rounded-[12px] focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-[15px] text-slate-900 placeholder:text-slate-400 transition-all outline-none"
+                    placeholder="Enter your password"
+                    required
                   />
+                  <button type="button" className="absolute right-4 text-slate-400 hover:text-slate-600 transition-colors">
+                    <EyeOff size={18} strokeWidth={1.5} />
+                  </button>
                 </div>
-              </label>
+              </div>
 
-              {error ? (
-                <div className="rounded-[18px] border border-aura-danger/25 bg-aura-danger/10 px-4 py-3 text-sm text-aura-danger">
+              {/* Remember Me & Forgot Password */}
+              <div className="flex items-center justify-between pt-2 pb-2">
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-300 text-blue-500 focus:ring-blue-500/30"
+                  />
+                  <span className="text-sm text-slate-600 font-medium">Remember me</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={onForgotPasswordClick}
+                  className="text-sm text-blue-500 hover:text-blue-600 font-medium transition-colors"
+                >
+                  Forgot password?
+                </button>
+              </div>
+
+              {/* Error Message */}
+              {error && (
+                <div className="rounded-[12px] border border-red-200 bg-red-50 p-3 text-sm text-red-600">
                   {error}
                 </div>
-              ) : null}
+              )}
 
-              <PrimaryActionButton
+              {/* Submit Button */}
+              <button
                 type="submit"
                 disabled={submitting || !username.trim() || !password.trim()}
-                className="w-full"
+                className="w-full py-3 mt-2 bg-gradient-to-r from-[#5598F5] to-[#4585F0] hover:from-[#4485DF] hover:to-[#3872D1] text-white rounded-[12px] font-medium transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                <LogIn size={16} className="mr-2" />
-                {submitting ? 'Signing in...' : 'Sign in'}
-              </PrimaryActionButton>
+                Sign in <ArrowRight size={18} />
+              </button>
+
+              {/* Divider */}
+              <div className="relative flex items-center py-4">
+                <div className="flex-grow border-t border-slate-100"></div>
+                <span className="flex-shrink-0 mx-4 text-[13px] text-slate-400">or</span>
+                <div className="flex-grow border-t border-slate-100"></div>
+              </div>
+
+              {/* Google Button */}
+              <div className="flex justify-center w-full pb-2">
+                <div id="google-btn-container" className="w-full flex justify-center min-h-[44px]"></div>
+              </div>
+
+              {/* Sign Up Link */}
+              <div className="text-center text-sm text-slate-500">
+                Don't have an account?{' '}
+                <button
+                  type="button"
+                  onClick={onSignUpClick}
+                  className="text-blue-500 hover:text-blue-600 font-medium"
+                >
+                  Sign up
+                </button>
+              </div>
             </form>
-          </SurfacePanel>
+          </div>
+        </div>
+
+        {/* Right Panel Footer (Badges) */}
+        <div className="pb-8 pt-4 flex justify-center items-center gap-6 sm:gap-8 text-[13px] text-slate-500 font-medium bg-white lg:bg-transparent z-10">
+          <div className="flex items-center gap-2"><ShieldCheck size={16} strokeWidth={1.5} /> Secure by design</div>
+          <div className="hidden sm:block w-px h-4 bg-slate-200"></div>
+          <div className="flex items-center gap-2"><Lock size={16} strokeWidth={1.5} /> Local-first</div>
+          <div className="hidden sm:block w-px h-4 bg-slate-200"></div>
+          <div className="flex items-center gap-2"><Code size={16} strokeWidth={1.5} /> Open source</div>
         </div>
       </div>
+
     </div>
   )
 }

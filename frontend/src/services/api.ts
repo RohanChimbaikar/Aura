@@ -81,16 +81,50 @@ export async function getSession(): Promise<SessionResponse> {
   return request<SessionResponse>('/auth/session')
 }
 
-export async function login(username: string, password: string): Promise<User> {
+export async function login(usernameOrEmail: string, password: string, rememberMe = false): Promise<User> {
   const response = await request<{ user: User }>('/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username: usernameOrEmail, password, rememberMe }),
   })
   return response.user
 }
 
 export async function logout(): Promise<void> {
   await request('/auth/logout', { method: 'POST' })
+}
+
+export async function registerUser(payload: Record<string, string>): Promise<User> {
+  const response = await request<{ user: User }>('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return response.user
+}
+
+export async function loginGoogle(credential: string): Promise<User> {
+  const response = await request<{ user: User }>('/auth/google', {
+    method: 'POST',
+    body: JSON.stringify({ credential }),
+  })
+  return response.user
+}
+
+export async function forgotPassword(email: string): Promise<{ success: boolean; message: string }> {
+  return request<{ success: boolean; message: string }>('/auth/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+}
+
+export async function resetPassword(payload: Record<string, string>): Promise<{ success: boolean; message: string }> {
+  return request<{ success: boolean; message: string }>('/auth/reset-password', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getCurrentProfile(): Promise<{ user: User }> {
+  return request<{ user: User }>('/auth/me')
 }
 
 export async function getUsers(): Promise<User[]> {
@@ -352,6 +386,10 @@ function buildMinimalAnalysisPayload(
       ? (raw.missingParts.filter((v) => typeof v === 'number') as number[])
       : [],
 
+    failedParts: Array.isArray(raw.failedParts)
+      ? (raw.failedParts.filter((v) => typeof v === 'number') as number[])
+      : [],
+
     filesProcessed:
       typeof raw.filesProcessed === 'number'
         ? raw.filesProcessed
@@ -386,6 +424,14 @@ function buildMinimalAnalysisPayload(
         ? raw.revealId
         : null,
 
+    senderDiagnostics: isObject(raw.senderDiagnostics)
+      ? (raw.senderDiagnostics as any)
+      : null,
+
+    receiverDiagnostics: isObject(raw.receiverDiagnostics)
+      ? (raw.receiverDiagnostics as any)
+      : null,
+
     summary: {
       recoveryStatus:
         summary.recoveryStatus === 'verified' ||
@@ -418,6 +464,8 @@ function buildMinimalAnalysisPayload(
         typeof summary.correctionsCount === 'number' ? summary.correctionsCount : 0,
       missingPartsCount:
         typeof summary.missingPartsCount === 'number' ? summary.missingPartsCount : 0,
+      failedPartsCount:
+        typeof summary.failedPartsCount === 'number' ? summary.failedPartsCount : 0,
       duplicatePartsCount:
         typeof summary.duplicatePartsCount === 'number' ? summary.duplicatePartsCount : 0,
       overallSnrDb:
@@ -434,6 +482,8 @@ function buildMinimalAnalysisPayload(
             : isObject(recovery) && typeof recovery.raw_text === 'string'
               ? (recovery.raw_text as string)
               : null,
+      characterAccuracy:
+        typeof summary.characterAccuracy === 'number' ? summary.characterAccuracy : null,
       trustMessage:
         typeof summary.trustMessage === 'string'
           ? summary.trustMessage
@@ -462,6 +512,9 @@ function buildMinimalAnalysisPayload(
       assets: Array.isArray(provenance.assets)
         ? (provenance.assets as AnalysisPayload['provenance']['assets'])
         : [],
+      databaseProvenance: isObject(provenance.databaseProvenance)
+        ? (provenance.databaseProvenance as any)
+        : null,
     },
 
     charts: {
@@ -674,4 +727,11 @@ export async function decodeAudioTransfer(transferId: number | string) {
     ...result,
     recoveredText: result.recoveredText ?? result.corrected_text ?? result.raw_text,
   }
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<{ success: boolean; message: string }> {
+  return request<{ success: boolean; message: string }>('/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  })
 }

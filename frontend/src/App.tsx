@@ -19,7 +19,27 @@ import {
   login as loginRequest,
   logout as logoutRequest,
   uploadWavFile,
+  registerUser,
+  loginGoogle,
+  forgotPassword,
+  resetPassword,
+  resolveUrl,
 } from './services/api'
+import { SignUpScreen } from './screens/SignUpScreen'
+import { ForgotPasswordScreen } from './screens/ForgotPasswordScreen'
+import { ResetPasswordScreen } from './screens/ResetPasswordScreen'
+import { ConversationSidebar } from './screens/ConversationSidebar'
+import { UserProfileModal } from './components/UserProfileModal'
+import { ChangePasswordModal } from './components/ChangePasswordModal'
+import { cn } from './lib/utils'
+import {
+  exportAuraPackage,
+  importAuraPackage,
+  attemptMetadataRecovery,
+} from './lib/transmission'
+import { TransmissionDetailsModal } from './components/TransmissionDetailsModal'
+import { RecipientModal } from './components/RecipientModal'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
   connectSocket,
   disconnectSocket,
@@ -386,7 +406,26 @@ function App() {
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisRunStatus>('idle')
   const [booting, setBooting] = useState(true)
   const [authError, setAuthError] = useState('')
+  const [authPage, setAuthPage] = useState<'login' | 'signup' | 'forgot-password' | 'reset-password'>('login')
+  const [resetToken, setResetToken] = useState('')
   const [chatError, setChatError] = useState('')
+  const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set())
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false)
+  const [importedAudios, setImportedAudios] = useState<SelectedAudio[]>([])
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null)
+  const [showDetailsModal, setShowDetailsModal] = useState(false)
+  const [detailsAudio, setDetailsAudio] = useState<SelectedAudio | null>(null)
+  const [showForwardModal, setShowForwardModal] = useState(false)
+  const [forwardingAudio, setForwardingAudio] = useState<SelectedAudio | null>(null)
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setToast({ message, type })
+    setTimeout(() => {
+      setToast(null)
+    }, 4000)
+  }
+
   const analysisRequestSeqRef = useRef(0)
   const inFlightAnalysisKeyRef = useRef<string | null>(null)
 
@@ -397,10 +436,20 @@ function App() {
   useEffect(() => {
     let cancelled = false
 
+    // Parse query params on mount for password reset token
+    const queryParams = new URLSearchParams(window.location.search)
+    const token = queryParams.get('token')
+    if (token) {
+      setResetToken(token)
+      setAuthPage('reset-password')
+      // Clear token from URL bar for aesthetics
+      window.history.replaceState({}, document.title, window.location.pathname)
+    }
+
     async function restoreSession() {
       try {
         const session = await getSession()
-        if (!cancelled && session.authenticated && session.user) {
+        if (session.authenticated && session.user && !cancelled) {
           setCurrentUser(session.user)
         }
       } catch {
@@ -452,7 +501,7 @@ function App() {
         setAuraMessages(nextAuraMessages)
         setSelectedRecipient((current) => {
           if (current && nextUsers.some((user) => user.username === current)) return current
-          return nextUsers[0]?.username ?? ''
+          return '' // Default to empty state dashboard
         })
       } catch {
         if (!cancelled) setChatError('Unable to load chat participants or transfers.')
@@ -539,6 +588,22 @@ function App() {
       })
     }
 
+    const handlePresence = (payload: { username: string; status: 'online' | 'offline' }) => {
+      setOnlineUsers((current) => {
+        const next = new Set(current)
+        if (payload.status === 'online') {
+          next.add(payload.username)
+        } else {
+          next.delete(payload.username)
+        }
+        return next
+      })
+    }
+
+    const handleOnlineUsers = (list: string[]) => {
+      setOnlineUsers(new Set(list))
+    }
+
     const handleError = (payload: { error?: string }) => {
       setChatError(payload.error || 'Realtime channel error.')
     }
@@ -548,6 +613,8 @@ function App() {
     onSocketEvent('new_message', handleMessage)
     onSocketEvent('file_received', handleTransfer)
     onSocketEvent('aura_chat_message', handleAuraChatMessage)
+    onSocketEvent('presence', handlePresence)
+    onSocketEvent('online_users', handleOnlineUsers)
     onSocketEvent('chat_error', handleError)
 
     socket.connect()
@@ -559,6 +626,8 @@ function App() {
       offSocketEvent('new_message', handleMessage)
       offSocketEvent('file_received', handleTransfer)
       offSocketEvent('aura_chat_message', handleAuraChatMessage)
+      offSocketEvent('presence', handlePresence)
+      offSocketEvent('online_users', handleOnlineUsers)
       offSocketEvent('chat_error', handleError)
       disconnectSocket()
     }
@@ -683,7 +752,6 @@ function App() {
       return false
     })
   }, [currentUser, liveConversation, selectedRecipient])
-
   const mergedConversationItems = useMemo(() => {
     if (!liveForSelectedChat.length) return conversationItems
     const byId = new Map<string, ConversationItem>()
@@ -700,10 +768,203 @@ function App() {
     })
   }, [conversationItems, liveForSelectedChat])
 
+  const handleAuraDownloadPackage = async (audio: SelectedAudio) => {
+    try {
+      showToast('Preparing transmission package...', 'info')
+      const audioUrl = resolveUrl(audio.audioUrl)
+      const fileName = audio.fileName || 'transmission.wav'
+      
+      const metadata = (audio.metadata || {}) as any
+      await exportAuraPackage(audioUrl, fileName, {
+        transmissionId: audio.transmissionId || undefined,
+        sender: metadata.sender || currentUser?.username,
+        recipient: metadata.recipient || selectedRecipient,
+        createdAt: metadata.created_at,
+        carrier: metadata.carrier || audio.metadata?.carrier_alias,
+        parts: audio.totalSegments || metadata.parts || (audio.segments?.length ?? 1),
+        mode: audio.mode || audio.metadata?.mode || metadata.mode || 'single',
+        reuse: metadata.reuse ?? false,
+        duration: audio.metadata?.carrier_duration_sec || metadata.duration,
+        analysis: metadata.analysis,
+      })
+      showToast('✓ Transmission exported successfully.', 'success')
+    } catch (err) {
+      console.error(err)
+      showToast('Export failed.', 'error')
+    }
+  }
+
+
+
+  const handleAuraShowDetails = (audio: SelectedAudio) => {
+    setDetailsAudio(audio)
+    setShowDetailsModal(true)
+  }
+
+  const handleAuraForward = (audio: SelectedAudio) => {
+    setForwardingAudio(audio)
+    setShowForwardModal(true)
+  }
+
+  const handleForwardConfirm = async (recipientUsername: string) => {
+    setShowForwardModal(false)
+    if (!forwardingAudio || !currentUser) return
+    
+    try {
+      showToast('Forwarding transmission...', 'info')
+      
+      const isMulti = forwardingAudio.mode === 'multi' || (forwardingAudio.segments?.length ?? 0) > 1
+      const payload: Omit<ChatMessage, 'id'> = {
+        type: isMulti ? 'audio_group' : 'audio',
+        direction: 'outgoing',
+        sender: currentUser.username,
+        receiver: recipientUsername,
+        createdAt: new Date().toISOString(),
+        audioUrl: forwardingAudio.audioUrl,
+        messageId: forwardingAudio.messageId,
+        transmissionId: forwardingAudio.transmissionId,
+        mode: forwardingAudio.mode,
+        totalSegments: forwardingAudio.totalSegments,
+        segments: forwardingAudio.segments,
+        manifest: forwardingAudio.metadata?.manifest,
+        metadata: forwardingAudio.metadata,
+      }
+
+      const saved = await createMessage(payload)
+      
+      if (recipientUsername === selectedRecipient) {
+        setAuraMessages((prev) => [...prev, saved])
+        setLiveConversation((prev) => [
+          ...prev,
+          {
+            type: 'aura_message',
+            id: `aura-${saved.id}`,
+            timestamp: saved.createdAt,
+            message: saved
+          }
+        ])
+      }
+
+      showToast('✓ Transmission forwarded successfully.', 'success')
+    } catch (err) {
+      console.error(err)
+      showToast('Forwarding failed.', 'error')
+    } finally {
+      setForwardingAudio(null)
+    }
+  }
+
+  const handleAuraDeleteMessage = (messageId: string) => {
+    setAuraMessages((prev) => prev.filter((m) => String(m.id) !== String(messageId) && String(m.messageId) !== String(messageId)))
+    setTransfers((prev) => prev.filter((t) => String(t.id) !== String(messageId) && String(t.messageId) !== String(messageId)))
+    setMessages((prev) => prev.filter((m) => String(m.id) !== String(messageId)))
+    
+    setLiveConversation((prev) => prev.filter((item) => {
+      if (item.type === 'aura_message') {
+        return String(item.message.id) !== String(messageId) && String(item.message.messageId) !== String(messageId)
+      }
+      if (item.type === 'file') {
+        return String(item.transfer.id) !== String(messageId) && String(item.transfer.messageId) !== String(messageId)
+      }
+      return true
+    }))
+
+    showToast('✓ Message removed from view.', 'success')
+  }
+
+  const handleImportFileForAnalysis = async (file: File) => {
+    try {
+      if (file.name.endsWith('.aura')) {
+        showToast('Processing Aura package...', 'info')
+        const { audioBlob, metadata } = await importAuraPackage(file)
+        
+        const audioFile = new File([audioBlob], metadata.file_name || file.name.replace(/\.aura$/i, '.wav'), {
+          type: 'audio/wav',
+        })
+        
+        showToast('Restoring transmission resources...', 'info')
+        const transfer = await uploadWavFile(currentUser?.username || 'self', audioFile)
+        
+        const importedAudio: SelectedAudio = {
+          messageId: String(transfer.id),
+          audioUrl: transfer.audioUrl,
+          fileName: transfer.originalFilename,
+          source: 'Uploaded',
+          metadata: metadata,
+          transmissionId: metadata.transmission_id || undefined,
+          totalSegments: metadata.parts || 1,
+          mode: metadata.mode || 'single',
+          analysisSourceType: metadata.mode === 'multi' || (metadata.parts ?? 1) > 1 ? 'grouped' : 'single',
+        }
+        
+        setImportedAudios((prev) => [importedAudio, ...prev])
+        showToast('✓ Transmission imported successfully.', 'success')
+        await handleAnalyze(importedAudio, { force: true })
+      } else {
+        showToast('Uploading audio file...', 'info')
+        const transfer = await uploadWavFile(currentUser?.username || 'self', file)
+        
+        const allAvailable = [
+          ...importedAudios,
+          ...auraMessages.map((m) => ({
+            messageId: m.messageId || m.id,
+            audioUrl: m.audioUrl || '',
+            fileName: m.metadata?.file_name || `${m.messageId || m.id}.wav`,
+            source: 'Chat' as const,
+            metadata: m.metadata,
+            transmissionId: m.transmissionId,
+            totalSegments: m.totalSegments,
+            segments: m.segments,
+          })),
+          ...transfers.map((t) => ({
+            messageId: String(t.id),
+            audioUrl: t.audioUrl || '',
+            fileName: t.originalFilename,
+            source: 'Chat' as const,
+            metadata: t.metadata,
+            transmissionId: t.metadata?.transmission_id,
+          })),
+        ]
+        
+        const recoveredMetadata = attemptMetadataRecovery(file.name, allAvailable)
+        
+        if (!recoveredMetadata) {
+          showToast('This transmission contains limited metadata. Some analysis features may be unavailable.', 'info')
+        } else {
+          showToast('✓ Metadata successfully recovered.', 'success')
+        }
+        
+        const importedAudio: SelectedAudio = {
+          messageId: String(transfer.id),
+          audioUrl: transfer.audioUrl,
+          fileName: transfer.originalFilename,
+          source: 'Uploaded',
+          metadata: recoveredMetadata || undefined,
+          transmissionId: recoveredMetadata?.transmission_id || undefined,
+          totalSegments: recoveredMetadata?.total_segments || 1,
+          mode: recoveredMetadata?.mode || 'single',
+          analysisSourceType: recoveredMetadata?.mode === 'multi' ? 'grouped' : 'single',
+        }
+        
+        setImportedAudios((prev) => [importedAudio, ...prev])
+        showToast('✓ Audio file imported successfully.', 'success')
+        await handleAnalyze(importedAudio, { force: true })
+      }
+    } catch (err) {
+      console.error('Import failed:', err)
+      showToast(err instanceof Error ? err.message : 'Import failed.', 'error')
+    }
+  }
+
   const availableAnalysisAudio = useMemo<SelectedAudio[]>(() => {
     if (!currentUser) return []
 
     const map = new Map<string, SelectedAudio>()
+
+    importedAudios.forEach((audio) => {
+      const key = `${audio.messageId}-${audio.audioUrl}`
+      map.set(key, audio)
+    })
 
     transfers
       .map((transfer) =>
@@ -715,8 +976,6 @@ function App() {
 
         if (!messageId || !audioUrl) return
 
-        // Do NOT re-inject selectedAudio if it's already an /api/outputs/ URL
-        // Prefer durable /api/files/{id}/download items
         if (
           selectedAudio?.audioUrl?.startsWith('/api/outputs/') &&
           transfer.messageId === selectedAudio.messageId &&
@@ -742,7 +1001,43 @@ function App() {
     }
 
     return Array.from(map.values())
-  }, [currentUser, selectedAudio, transfers])
+  }, [currentUser, selectedAudio, transfers, importedAudios])
+
+  const recentUsers = useMemo<string[]>(() => {
+    if (!currentUser) return []
+    const currentUsername = currentUser.username
+    const contacts = new Map<string, number>()
+
+    const updateContact = (username: string | undefined, timeStr: string) => {
+      if (!username || username === currentUsername) return
+      const time = new Date(timeStr).getTime()
+      if (Number.isFinite(time)) {
+        const existing = contacts.get(username) || 0
+        if (time > existing) {
+          contacts.set(username, time)
+        }
+      }
+    }
+
+    for (const msg of messages) {
+      updateContact(msg.sender, msg.createdAt)
+      updateContact(msg.receiver, msg.createdAt)
+    }
+
+    for (const msg of auraMessages) {
+      updateContact(msg.sender, msg.createdAt)
+      updateContact(msg.receiver, msg.createdAt)
+    }
+
+    for (const tr of transfers) {
+      updateContact(tr.sender, tr.createdAt)
+      updateContact(tr.receiver, tr.createdAt)
+    }
+
+    return Array.from(contacts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([username]) => username)
+  }, [currentUser, messages, auraMessages, transfers])
 
   useEffect(() => {
     console.info('[analysis-ui] state', {
@@ -754,15 +1049,63 @@ function App() {
     })
   }, [analysis, analysisError, analysisLoading, analysisStatus, hasAttemptedAnalysis])
 
-  async function handleLogin(username: string, password: string) {
+  async function handleLogin(usernameOrEmail: string, password: string, rememberMe: boolean) {
     setAuthError('')
     setChatError('')
     try {
-      setCurrentUser(await loginRequest(username, password))
+      setCurrentUser(await loginRequest(usernameOrEmail, password, rememberMe))
     } catch (error) {
       setAuthError(
         error instanceof Error ? error.message : 'Login failed. Check credentials.',
       )
+    }
+  }
+
+  async function handleGoogleLogin(credential: string) {
+    setAuthError('')
+    setChatError('')
+    try {
+      setCurrentUser(await loginGoogle(credential))
+    } catch (error) {
+      setAuthError(
+        error instanceof Error ? error.message : 'Google sign-in failed.',
+      )
+    }
+  }
+
+  async function handleRegister(payload: Record<string, string>) {
+    setAuthError('')
+    try {
+      setCurrentUser(await registerUser(payload))
+    } catch (error) {
+      setAuthError(
+        error instanceof Error ? error.message : 'Registration failed.',
+      )
+      throw error
+    }
+  }
+
+  async function handleForgotPassword(email: string) {
+    setAuthError('')
+    try {
+      await forgotPassword(email)
+    } catch (error) {
+      setAuthError(
+        error instanceof Error ? error.message : 'Failed to request reset link.',
+      )
+      throw error
+    }
+  }
+
+  async function handleResetPassword(password: string) {
+    setAuthError('')
+    try {
+      await resetPassword({ token: resetToken, password })
+    } catch (error) {
+      setAuthError(
+        error instanceof Error ? error.message : 'Failed to reset password.',
+      )
+      throw error
     }
   }
 
@@ -772,6 +1115,7 @@ function App() {
     } finally {
       setCurrentUser(null)
       setActiveScreen('chat')
+      setAuthPage('login')
     }
   }
 
@@ -851,61 +1195,64 @@ function App() {
     throw error
   }
 }
-async function handleAuraSendToChat(
-  payload: Omit<ChatMessage, 'id'>,
-  selected: SelectedAudio,
-) {
-  if (!currentUser || !selectedRecipient) {
-    setChatError('Choose a recipient before sending encoded audio.')
-    return
-  }
+  async function handleAuraSendToChat(
+    payload: Omit<ChatMessage, 'id'>,
+    selected: SelectedAudio,
+    recipientOverride?: string,
+  ) {
+    const recipient = recipientOverride || selectedRecipient
+    if (!currentUser || !recipient) {
+      setChatError('Choose a recipient before sending encoded audio.')
+      return
+    }
 
-  const tempId = `temp-${Date.now()}`
+    const tempId = `temp-${Date.now()}`
 
-  const optimisticMessage: ChatMessage = {
-    ...payload,
-    id: tempId,
-    sender: currentUser.username,
-    receiver: selectedRecipient,
-    direction: 'outgoing',
-    createdAt: new Date().toISOString(),
-  }
-
-  // 1. Show immediately
-  setAuraMessages((current) => [...current, optimisticMessage])
-
-  try {
-    const saved = await createMessage({
+    const optimisticMessage: ChatMessage = {
       ...payload,
+      id: tempId,
       sender: currentUser.username,
-      receiver: selectedRecipient,
+      receiver: recipient,
       direction: 'outgoing',
       createdAt: new Date().toISOString(),
-    })
+    }
 
-    // 2. Replace optimistic with real
-    setAuraMessages((current) =>
-      current.map((msg) =>
-        msg.id === tempId ? saved : msg
+    // 1. Show immediately
+    setAuraMessages((current) => [...current, optimisticMessage])
+
+    try {
+      const saved = await createMessage({
+        ...payload,
+        sender: currentUser.username,
+        receiver: recipient,
+        direction: 'outgoing',
+        createdAt: new Date().toISOString(),
+      })
+
+      // 2. Replace optimistic with real
+      setAuraMessages((current) =>
+        current.map((msg) =>
+          msg.id === tempId ? saved : msg
+        )
       )
-    )
 
-    setSelectedAudio({
-      ...selected,
-      messageId: saved.messageId || selected.messageId,
-      source: 'Chat',
-    })
+      setSelectedAudio({
+        ...selected,
+        messageId: saved.messageId || selected.messageId,
+        source: 'Chat',
+      })
 
-    setActiveScreen('chat')
-  } catch (error) {
-    // 3. Remove if failed
-    setAuraMessages((current) =>
-      current.filter((msg) => msg.id !== tempId)
-    )
+      setSelectedRecipient(recipient)
+      setActiveScreen('chat')
+    } catch (error) {
+      // 3. Remove if failed
+      setAuraMessages((current) =>
+        current.filter((msg) => msg.id !== tempId)
+      )
 
-    setChatError('Failed to send encoded audio.')
+      setChatError('Failed to send encoded audio.')
+    }
   }
-}
  function resetAnalysisStateForNewTarget() {
   analysisRequestSeqRef.current += 1
   inFlightAnalysisKeyRef.current = null
@@ -1093,7 +1440,54 @@ async function runAnalysis(audio: SelectedAudio, options?: { force?: boolean }) 
   if (!currentUser) {
     return (
       <div className={theme === 'light' ? 'theme-light' : ''}>
-        <LoginScreen onLogin={handleLogin} error={authError} />
+        {authPage === 'login' && (
+          <LoginScreen
+            onLogin={handleLogin}
+            onGoogleLogin={handleGoogleLogin}
+            onSignUpClick={() => {
+              setAuthError('')
+              setAuthPage('signup')
+            }}
+            onForgotPasswordClick={() => {
+              setAuthError('')
+              setAuthPage('forgot-password')
+            }}
+            error={authError}
+            theme={theme}
+          />
+        )}
+        {authPage === 'signup' && (
+          <SignUpScreen
+            onRegister={handleRegister}
+            onGoogleLogin={handleGoogleLogin}
+            onBackToLogin={() => {
+              setAuthError('')
+              setAuthPage('login')
+            }}
+            error={authError}
+            theme={theme}
+          />
+        )}
+        {authPage === 'forgot-password' && (
+          <ForgotPasswordScreen
+            onSubmit={handleForgotPassword}
+            onBackToLogin={() => {
+              setAuthError('')
+              setAuthPage('login')
+            }}
+            error={authError}
+          />
+        )}
+        {authPage === 'reset-password' && (
+          <ResetPasswordScreen
+            onSubmit={handleResetPassword}
+            onBackToLogin={() => {
+              setAuthError('')
+              setAuthPage('login')
+            }}
+            error={authError}
+          />
+        )}
       </div>
     )
   }
@@ -1109,6 +1503,21 @@ async function runAnalysis(audio: SelectedAudio, options?: { force?: boolean }) 
       <div className="relative flex h-full min-h-0">
         <AppSidebar active={activeScreen} onSelect={setActiveScreen}  theme={theme}/>
 
+        {activeScreen === 'chat' && (
+          <ConversationSidebar
+            currentUser={currentUser}
+            users={users}
+            selectedRecipient={selectedRecipient}
+            onSelectRecipient={setSelectedRecipient}
+            onlineUsers={onlineUsers}
+            onShowProfile={() => setProfileOpen(true)}
+            onShowChangePassword={() => setChangePasswordOpen(true)}
+            onSettingsClick={() => setActiveScreen('settings')}
+            onLogout={handleLogout}
+            theme={theme}
+          />
+        )}
+
         <main
           className={
             activeScreen === 'chat'
@@ -1121,14 +1530,18 @@ async function runAnalysis(audio: SelectedAudio, options?: { force?: boolean }) 
               currentUser={currentUser}
               users={users}
               selectedRecipient={selectedRecipient}
-              onSelectRecipient={setSelectedRecipient}
               conversationItems={mergedConversationItems}
               connectionState={connectionState}
               onSendMessage={handleSendMessage}
               onUploadFile={handleUpload}
               onRevealAudio={handleReveal}
               onAnalyzeAudio={handleAnalyze}
+              onDownloadPackage={handleAuraDownloadPackage}
+              onForward={handleAuraForward}
+              onShowDetails={handleAuraShowDetails}
+              onDeleteMessage={handleAuraDeleteMessage}
               error={chatError}
+              onlineUsers={onlineUsers}
             />
           ) : (
             <div className="mx-auto flex max-w-[1600px] flex-col gap-3">
@@ -1145,6 +1558,9 @@ async function runAnalysis(audio: SelectedAudio, options?: { force?: boolean }) 
                   onSelectAudio={handleSelectAudio}
                   currentUser={currentUser}
                   selectedRecipient={selectedRecipient}
+                  users={users}
+                  onlineUsers={onlineUsers}
+                  recentUsers={recentUsers}
                 />
               ) : null}
 
@@ -1162,6 +1578,7 @@ async function runAnalysis(audio: SelectedAudio, options?: { force?: boolean }) 
                   selectedAudio={selectedAudio}
                   availableAudio={availableAnalysisAudio}
                   onAnalyzeAudio={handleAnalyze}
+                  onImportAudio={handleImportFileForAnalysis}
                   loading={analysisLoading}
                   error={analysisError}
                   hasAttempted={hasAttemptedAnalysis}
@@ -1171,30 +1588,89 @@ async function runAnalysis(audio: SelectedAudio, options?: { force?: boolean }) 
                 />
               ) : null}
               
-{activeScreen === 'compare' ? (
-  <CompareScreen
-    analysis={analysis}
-    selectedAudio={selectedAudio}
-    availableAudio={availableAnalysisAudio}
-    loading={analysisLoading}
-    error={analysisError}
-    onSelectAudio={handleCompareSelectAudio}
-    onAnalyzeAudio={handleAnalyze}
-    theme={theme}
-  />
-) : null}
+              {activeScreen === 'compare' ? (
+                <CompareScreen
+                  analysis={analysis}
+                  selectedAudio={selectedAudio}
+                  availableAudio={availableAnalysisAudio}
+                  loading={analysisLoading}
+                  error={analysisError}
+                  onSelectAudio={handleCompareSelectAudio}
+                  onAnalyzeAudio={handleAnalyze}
+                  theme={theme}
+                />
+              ) : null}
+              
               {activeScreen === 'settings' ? (
                 <SettingsPageV2
                   theme={theme}
                   onThemeChange={setTheme}
-                  currentUser={currentUser.username}
+                  currentUser={currentUser}
                   onLogout={handleLogout}
+                  onChangePasswordClick={() => setChangePasswordOpen(true)}
                 />
               ) : null}
             </div>
           )}
         </main>
       </div>
+
+      {profileOpen && (
+        <UserProfileModal
+          user={currentUser}
+          onClose={() => setProfileOpen(false)}
+        />
+      )}
+
+      {changePasswordOpen && (
+        <ChangePasswordModal
+          onClose={() => setChangePasswordOpen(false)}
+        />
+      )}
+
+      {showDetailsModal && (
+        <TransmissionDetailsModal
+          isOpen={showDetailsModal}
+          onClose={() => {
+            setShowDetailsModal(false)
+            setDetailsAudio(null)
+          }}
+          audio={detailsAudio}
+          showToast={showToast}
+        />
+      )}
+
+      {showForwardModal && (
+        <RecipientModal
+          isOpen={showForwardModal}
+          onClose={() => {
+            setShowForwardModal(false)
+            setForwardingAudio(null)
+          }}
+          users={users}
+          onlineUsers={onlineUsers}
+          recentUsers={recentUsers}
+          onConfirm={handleForwardConfirm}
+        />
+      )}
+
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className={cn(
+              "fixed bottom-6 right-6 z-[200] flex items-center gap-2 rounded-2xl border px-4 py-3 text-[13.5px] font-semibold text-white shadow-2xl backdrop-blur-md",
+              toast.type === 'success' ? 'border-emerald-500/30 bg-emerald-950/85' : 
+              toast.type === 'error' ? 'border-red-500/30 bg-red-950/85' : 
+              'border-aura-accent/30 bg-aura-surface/85'
+            )}
+          >
+            <span>{toast.message}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

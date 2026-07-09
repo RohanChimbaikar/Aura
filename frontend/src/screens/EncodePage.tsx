@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Clock3,
   Download,
-  Hash,
-  Layers2,
   Send,
   Sparkles,
+  Play,
+  Pause,
 } from 'lucide-react'
 import { encodeAudio, previewEncode, resolveUrl } from '../services/api'
 import type { ChatMessage, EncodePreview, EncodeResult, SelectedAudio, User } from '../types'
+import { RecipientModal } from '../components/RecipientModal'
 
 const PRESETS = [
   'the files were altered before review',
@@ -17,50 +17,34 @@ const PRESETS = [
 ]
 
 type Props = {
-  onSendToChat: (message: Omit<ChatMessage, 'id'>, selected: SelectedAudio) => void
+  onSendToChat: (message: Omit<ChatMessage, 'id'>, selected: SelectedAudio, recipientOverride?: string) => void
   onSelectAudio: (audio: SelectedAudio) => void
   currentUser?: User
   selectedRecipient?: string
-}
-
-function StatCard({
-  label,
-  value,
-  icon: Icon,
-  mono = false,
-}: {
-  label: string
-  value: React.ReactNode
-  icon: React.ElementType
-  mono?: boolean
-}) {
-  return (
-    <div className="rounded-xl border border-aura-border/10 bg-aura-surface px-3 py-3 shadow-sm">
-      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
-        <Icon size={11} strokeWidth={2.2} />
-        <span>{label}</span>
-      </div>
-      <div
-        className={`text-[18px] font-semibold leading-none tracking-tight text-aura-text ${
-          mono ? 'font-mono text-[14px] leading-tight' : ''
-        }`}
-      >
-        {value}
-      </div>
-    </div>
-  )
+  users: User[]
+  onlineUsers: Set<string>
+  recentUsers: string[]
 }
 
 export function EncodePage({
   onSendToChat,
   onSelectAudio,
   selectedRecipient,
+  users,
+  onlineUsers,
+  recentUsers,
+  currentUser,
 }: Props) {
   const [text, setText] = useState(PRESETS[0])
   const [preview, setPreview] = useState<EncodePreview | null>(null)
   const [result, setResult] = useState<EncodeResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [showRecipientModal, setShowRecipientModal] = useState(false)
+  
+  // Audio playback preview state
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const [isPlaying, setIsPlaying] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
@@ -87,6 +71,7 @@ export function EncodePage({
     try {
       const next = await encodeAudio(text)
       setResult(next)
+      setIsPlaying(false) // Reset preview player state
 
       onSelectAudio({
         messageId: next.message_id,
@@ -102,20 +87,81 @@ export function EncodePage({
     }
   }
 
-  const canSendToChat = Boolean(selectedRecipient)
+  // Toggle audio preview play/pause
+  const handlePlayPreview = () => {
+    if (!audioRef.current) return
+    if (isPlaying) {
+      audioRef.current.pause()
+    } else {
+      audioRef.current.play()
+    }
+  }
+
+  // Handle Send to Chat action (always opens selection/confirmation dialog)
+  const handleSendToChatClick = () => {
+    setShowRecipientModal(true)
+  }
+
+  const triggerSendToChat = (recipientUsername: string) => {
+    if (!result) return
+    onSendToChat(
+      {
+        type: result.mode === 'multi' ? 'audio_group' : 'audio',
+        direction: 'outgoing',
+        createdAt: new Date().toISOString(),
+        audioUrl: result.audio_url,
+        messageId: result.message_id,
+        transmissionId: result.transmission_id,
+        mode: result.mode,
+        totalSegments: result.total_segments,
+        segments:
+          result.mode === 'multi'
+            ? (result.segments || []).map((segment) => ({
+                segmentIndex: segment.segment_index,
+                totalSegments: result.total_segments,
+                audioUrl: segment.audio_url,
+                fileName: segment.stego_file_name,
+                carrierName: segment.carrier_name,
+                carrierDurationSec: segment.carrier_duration_sec,
+              }))
+            : undefined,
+        manifest: result.manifest,
+        metadata: result,
+      },
+      {
+        messageId: result.message_id,
+        audioUrl: result.audio_url,
+        fileName: result.file_name,
+        source: 'Chat',
+        mode: result.mode,
+        transmissionId: result.transmission_id,
+        totalSegments: result.total_segments,
+        segments:
+          result.mode === 'multi'
+            ? (result.segments || []).map((segment) => ({
+                segmentIndex: segment.segment_index,
+                totalSegments: result.total_segments,
+                audioUrl: segment.audio_url,
+                fileName: segment.stego_file_name,
+                carrierName: segment.carrier_name,
+                carrierDurationSec: segment.carrier_duration_sec,
+              }))
+            : undefined,
+        metadata: result,
+      },
+      recipientUsername
+    )
+  }
+
+  const handleConfirmRecipient = (recipientUsername: string) => {
+    setShowRecipientModal(false)
+    triggerSendToChat(recipientUsername)
+  }
+
   const planMode = preview?.plan?.mode
   const isMultiPlanned = planMode === 'multi'
   const isExceeded = planMode === 'exceeded'
-  const carrierUseCounts =
-    isMultiPlanned && preview?.plan?.segments
-      ? preview.plan.segments.reduce<Record<string, number>>((acc, segment) => {
-          acc[segment.carrierName] = (acc[segment.carrierName] ?? 0) + 1
-          return acc
-        }, {})
-      : {}
-  const carrierSummary = Object.entries(carrierUseCounts)
-    .map(([name, count]) => `${name} x ${count}`)
-    .join(', ')
+
 
   return (
     <div className="flex flex-col gap-4">
@@ -232,7 +278,7 @@ export function EncodePage({
                 type="button"
                 onClick={handleEncode}
                 disabled={busy || !text.trim() || isExceeded}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-aura-accent px-4 py-2.5 text-[13px] font-semibold text-white shadow-sm transition hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
+                className="h-10 inline-flex items-center justify-center gap-2 px-4 rounded-xl bg-aura-accent text-white font-semibold text-[13px] transition hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 shadow-sm shadow-aura-accent/15"
               >
                 <Sparkles size={15} strokeWidth={2.2} />
                 {busy ? 'Encoding…' : 'Generate Secure Audio'}
@@ -258,7 +304,16 @@ export function EncodePage({
               </div>
 
               <div className="px-4 py-3">
-                <audio controls src={resolveUrl(result.audio_url)} className="w-full" />
+                <audio
+                  ref={audioRef}
+                  controls
+                  src={resolveUrl(result.audio_url)}
+                  onPlay={() => setIsPlaying(true)}
+                  onPause={() => setIsPlaying(false)}
+                  onEnded={() => setIsPlaying(false)}
+                  className="w-full"
+                />
+                
                 {result.mode === 'multi' && (result.segments?.length ?? 0) > 1 ? (
                   <div className="mt-3 grid gap-2">
                     {(result.segments || [])
@@ -276,70 +331,32 @@ export function EncodePage({
                 ) : null}
               </div>
 
-              <div className="flex flex-wrap gap-2 border-t border-aura-reveal/15 bg-aura-bg/20 px-4 py-3">
+              <div className="flex flex-wrap gap-2.5 border-t border-aura-reveal/15 bg-aura-bg/20 px-4 py-3">
+                <button
+                  type="button"
+                  onClick={handlePlayPreview}
+                  className="h-10 inline-flex items-center justify-center gap-2 px-4 rounded-xl border border-aura-border/12 bg-white/[0.02] hover:bg-white/[0.06] text-aura-text transition font-semibold text-[13px] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+                  <span>{isPlaying ? 'Pause' : 'Preview'}</span>
+                </button>
+
                 <a
                   href={resolveUrl(result.audio_url)}
-                  className="inline-flex items-center gap-2 rounded-xl border border-aura-border/10 bg-aura-surface px-3 py-2 text-[12px] font-medium text-aura-text transition hover:bg-aura-bg/70"
+                  download={result.file_name}
+                  className="h-10 inline-flex items-center justify-center gap-2 px-4 rounded-xl border border-aura-border/12 bg-white/[0.02] hover:bg-white/[0.06] text-aura-text transition font-semibold text-[13px] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  <Download size={13} />
-                  Download WAV
+                  <Download size={14} />
+                  <span>Download</span>
                 </a>
 
                 <button
                   type="button"
-                  disabled={!canSendToChat}
-                  onClick={() =>
-                    onSendToChat(
-                      {
-                        type: result.mode === 'multi' ? 'audio_group' : 'audio',
-                        direction: 'outgoing',
-                        createdAt: new Date().toISOString(),
-                        audioUrl: result.audio_url,
-                        messageId: result.message_id,
-                        transmissionId: result.transmission_id,
-                        mode: result.mode,
-                        totalSegments: result.total_segments,
-                        segments:
-                          result.mode === 'multi'
-                            ? (result.segments || []).map((segment) => ({
-                                segmentIndex: segment.segment_index,
-                                totalSegments: result.total_segments,
-                                audioUrl: segment.audio_url,
-                                fileName: segment.stego_file_name,
-                                carrierName: segment.carrier_name,
-                                carrierDurationSec: segment.carrier_duration_sec,
-                              }))
-                            : undefined,
-                        manifest: result.manifest,
-                        metadata: result,
-                      },
-                      {
-                        messageId: result.message_id,
-                        audioUrl: result.audio_url,
-                        fileName: result.file_name,
-                        source: 'Chat',
-                        mode: result.mode,
-                        transmissionId: result.transmission_id,
-                        totalSegments: result.total_segments,
-                        segments:
-                          result.mode === 'multi'
-                            ? (result.segments || []).map((segment) => ({
-                                segmentIndex: segment.segment_index,
-                                totalSegments: result.total_segments,
-                                audioUrl: segment.audio_url,
-                                fileName: segment.stego_file_name,
-                                carrierName: segment.carrier_name,
-                                carrierDurationSec: segment.carrier_duration_sec,
-                              }))
-                            : undefined,
-                        metadata: result,
-                      },
-                    )
-                  }
-                  className="inline-flex items-center gap-2 rounded-xl border border-aura-reveal/25 bg-aura-reveal/12 px-3 py-2 text-[12px] font-semibold text-aura-reveal transition disabled:cursor-not-allowed disabled:opacity-40"
+                  onClick={handleSendToChatClick}
+                  className="h-10 inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-aura-accent text-white font-semibold text-[13px] transition hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 shadow-sm shadow-aura-accent/15 flex-1 md:flex-none"
                 >
-                  <Send size={13} />
-                  {canSendToChat ? 'Send to chat' : 'Select recipient first'}
+                  <Send size={14} />
+                  <span>Send to Chat</span>
                 </button>
               </div>
             </section>
@@ -348,117 +365,89 @@ export function EncodePage({
 
         {/* Right column */}
         <div className="flex flex-col gap-4">
-          {/* Capacity */}
-          <section className="rounded-2xl border border-aura-border/10 bg-aura-surface p-4 shadow-sm">
-            <div className="mb-3">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-aura-dim">
-                Payload capacity
-              </div>
-              <div className="mt-1 text-[12px] text-aura-dim">
-                Live preview for the current message.
-              </div>
+          {/* Transmission Details Card */}
+          <section className="rounded-2xl border border-aura-border/10 bg-aura-surface p-5 shadow-sm">
+            <div className="mb-4">
+              <h2 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-aura-dim">
+                Transmission Details
+              </h2>
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5">
-              <StatCard
-                label="Header bytes"
-                value={preview?.header_bytes ?? 2}
-                icon={Layers2}
-              />
-              <StatCard
-                label="Required chunks"
-                value={preview?.required_chunks ?? '—'}
-                icon={Hash}
-              />
-              <StatCard
-                label="Required seconds"
-                value={preview?.required_seconds ?? '—'}
-                icon={Clock3}
-              />
-              <StatCard
-                label="Required minutes"
-                value={preview?.required_minutes ?? '—'}
-                icon={Clock3}
-              />
-            </div>
-          </section>
-
-          {/* Carrier */}
-          <section className="rounded-2xl border border-aura-border/10 bg-aura-surface p-4 shadow-sm">
-            <div className="mb-3">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-aura-dim">
-                Carrier
+            <div className="space-y-4">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">Carrier</div>
+                <div className="mt-1 font-mono text-[14px] font-semibold text-aura-text truncate" title={isMultiPlanned ? 'Multi-part Pool' : (preview?.carrier_alias ?? '—')}>
+                  {isMultiPlanned ? 'Multi-part Pool' : (preview?.carrier_alias ?? '—')}
+                </div>
               </div>
-              <div className="mt-1 text-[12px] text-aura-dim">
-                {isMultiPlanned
-                  ? 'Ordered multi-part transmission using approved carrier reuse.'
-                  : 'Aura chooses the smallest carrier that fits this message.'}
+
+              <div className="h-px bg-white/[0.04]" />
+
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">Mode</div>
+                <div className="mt-1 text-[14px] font-semibold text-aura-text">
+                  {isMultiPlanned ? 'Multi-part' : (planMode === 'exceeded' ? 'Exceeded' : 'Single-part')}
+                </div>
               </div>
-            </div>
 
-            <div className="grid gap-2.5">
-              {isMultiPlanned ? (
-                <>
-                  <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
-                      Mode
-                    </div>
-                    <div className="mt-1 text-[14px] font-semibold text-aura-text">Multi-part transmission</div>
-                  </div>
-                  <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
-                      Parts
-                    </div>
-                    <div className="mt-1 text-[14px] font-semibold text-aura-text">{preview?.plan?.totalSegments ?? '—'}</div>
-                  </div>
-                  <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
-                      Sequence
-                    </div>
-                    <div className="mt-1 text-[14px] font-semibold text-aura-text">Ordered</div>
-                  </div>
-                  <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
-                      Reuse
-                    </div>
-                    <div className="mt-1 text-[14px] font-semibold text-aura-text">Enabled</div>
-                  </div>
-                  {carrierSummary ? (
-                    <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
-                        Carrier summary
-                      </div>
-                      <div className="mt-1 text-[13px] font-medium text-aura-text">{carrierSummary}</div>
-                    </div>
-                  ) : null}
-                </>
-              ) : (
-                <>
-                  <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
-                      Name
-                    </div>
-                    <div className="mt-1 font-mono text-[14px] font-semibold text-aura-text">
-                      {preview?.carrier_alias ?? '—'}
-                    </div>
-                  </div>
+              <div className="h-px bg-white/[0.04]" />
 
-                  <div className="rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">
-                      Duration
-                    </div>
-                    <div className="mt-1 text-[16px] font-semibold text-aura-text">
-                      {preview?.carrier_duration_sec
-                        ? `${preview.carrier_duration_sec} sec`
-                        : '—'}
-                    </div>
-                  </div>
-                </>
-              )}
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">Duration</div>
+                <div className="mt-1 text-[14px] font-semibold text-aura-text">
+                  {isMultiPlanned
+                    ? `${preview?.plan?.totalDurationMin ?? 0} min`
+                    : (preview?.carrier_duration_sec 
+                        ? `${Math.floor(preview.carrier_duration_sec / 60)} min` 
+                        : '—')}
+                </div>
+              </div>
+
+              <div className="h-px bg-white/[0.04]" />
+
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">Capacity</div>
+                <div className="mt-1 font-mono text-[14px] font-semibold text-aura-text">
+                  {preview?.required_chunks ? `${preview.required_chunks} chunks` : '—'}
+                </div>
+              </div>
+
+              <div className="h-px bg-white/[0.04]" />
+
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">Protection</div>
+                <div className="mt-1 text-[14px] font-semibold text-aura-text">
+                  Length Header Repeat ×3
+                </div>
+              </div>
+
+              <div className="h-px bg-white/[0.04]" />
+
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-aura-dim">Required Duration</div>
+                <div className="mt-1 text-[14px] font-semibold text-aura-text">
+                  {isMultiPlanned
+                    ? `${preview?.plan?.totalDurationSec ?? 0} seconds`
+                    : (preview?.required_seconds ? `${preview.required_seconds} seconds` : '—')}
+                </div>
+              </div>
             </div>
           </section>
         </div>
       </div>
+
+      {/* Recipient Selection Dialog Modal */}
+      {currentUser && (
+        <RecipientModal
+          isOpen={showRecipientModal}
+          onClose={() => setShowRecipientModal(false)}
+          users={users}
+          onlineUsers={onlineUsers}
+          recentUsers={recentUsers}
+          selectedRecipient={selectedRecipient}
+          onConfirm={handleConfirmRecipient}
+        />
+      )}
     </div>
   )
 }

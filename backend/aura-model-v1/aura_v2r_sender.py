@@ -310,6 +310,24 @@ def encode_message_to_stego_chunks(cover_chunks, text, transmission_id, part_ind
     )
     header_checksum = sum(header_bytes_without_chk) % 256
     header_bytes = header_bytes_without_chk + struct.pack("B", header_checksum)
+    packet_info = {
+        "version": 1,
+        "transmission_id": transmission_id,
+        "part_index": part_index,
+        "total_parts": total_parts,
+        "payload_len": payload_len,
+        "payload_crc": crc_payload,
+        "chunk_count": total_chunks,
+        "ecc_scheme": ecc_scheme,
+        "codec_hint": codec_hint,
+        "timestamp": timestamp,
+        "header_checksum": header_checksum,
+        "header_hex": header_bytes.hex(),
+        "header_bytes": HEADER_BYTES,
+        "header_nibbles": HEADER_NIBBLES,
+        "sync_pattern": sync_pattern,
+        "repeat_factor": repeat_factor,
+    }
 
     # 5. Convert header bytes to nibbles
     header_nibbles = []
@@ -339,7 +357,16 @@ def encode_message_to_stego_chunks(cover_chunks, text, transmission_id, part_ind
         cfg=cfg
     )
 
-    return stego_chunks, header_nibbles, payload_nibbles, all_nibbles, repeated_payload_nibbles
+    packet_info.update(
+        {
+            "header_nibble_count": len(header_nibbles),
+            "payload_nibble_count": len(payload_nibbles),
+            "repeated_payload_nibble_count": len(repeated_payload_nibbles),
+            "packet_nibble_count": len(all_nibbles),
+        }
+    )
+
+    return stego_chunks, header_nibbles, payload_nibbles, all_nibbles, repeated_payload_nibbles, packet_info
 
 
 # ============================================================
@@ -511,7 +538,7 @@ def main():
         chunk_len=cfg["chunk_samples"]
     )
 
-    stego_chunks, header_nibbles, payload_nibbles, all_raw_nibbles, repeated_nibbles = encode_message_to_stego_chunks(
+    stego_chunks, header_nibbles, payload_nibbles, all_raw_nibbles, repeated_nibbles, packet_info = encode_message_to_stego_chunks(
         cover_chunks, text, args.transmission_id, args.part_index, args.total_parts, args.ecc_scheme, args.codec_hint, cfg, payload_bytes=payload_bytes
     )
 
@@ -525,9 +552,31 @@ def main():
 
     print("Header raw nibbles :", len(header_nibbles))
     print("Payload nibbles    :", len(payload_nibbles))
+    print("Payload CRC        :", packet_info["payload_crc"])
+    print("Header checksum    :", packet_info["header_checksum"])
+    print("Header timestamp   :", packet_info["timestamp"])
+    print("Header hex         :", packet_info["header_hex"])
+    print("Sync pattern       :", packet_info["sync_pattern"])
     print("Total chunks       :", len(all_raw_nibbles))
     print("Repeated nibbles   :", len(repeated_nibbles))
     print("Saved stego file   :", args.out)
+    sender_diagnostics = {
+        **packet_info,
+        "text_chars": msg_len,
+        "payload_hex": payload_bytes.hex(),
+        "payload_byte_length": len(payload_bytes),
+        "required_chunks": required_chunks,
+        "required_seconds": round(required_seconds, 2),
+        "mode": "safe" if args.safe_mode else "manual",
+        "chosen_cover": chosen_cover,
+        "chosen_cover_duration_sec": round(chosen_cover_duration, 2),
+        "embed_strength": cfg["embed_strength_val"],
+        "sample_rate": cfg["sample_rate"],
+        "chunk_seconds": cfg["chunk_seconds"],
+        "chunk_samples": cfg["chunk_samples"],
+        "output_path": args.out,
+    }
+    print("AURA_SENDER_DIAGNOSTICS_JSON:", json.dumps(sender_diagnostics, sort_keys=True))
     print("=" * 80)
 
 

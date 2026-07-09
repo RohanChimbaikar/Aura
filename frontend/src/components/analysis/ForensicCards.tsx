@@ -161,8 +161,8 @@ export function RecoveredMessageCard({
         <Stat label="Total chunks" value={String(analysis.summary.payloadChunks)} />
         <Stat label="Ignored tail" value={String(analysis.summary.ignoredTail)} />
         <Stat
-          label="Missing / duplicate"
-          value={`${analysis.summary.missingPartsCount} / ${analysis.summary.duplicatePartsCount}`}
+          label="Missing / failed / duplicate"
+          value={`${analysis.summary.missingPartsCount} / ${analysis.summary.failedPartsCount || 0} / ${analysis.summary.duplicatePartsCount}`}
         />
       </div>
     </Panel>
@@ -249,14 +249,14 @@ export function RecoverySequenceCard({
                     ? 'bg-aura-reveal'
                     : item.status === 'corrected'
                       ? 'bg-aura-accent'
-                      : item.status === 'missing' || item.status === 'duplicate'
+                      : item.status === 'missing' || item.status === 'failed' || item.status === 'duplicate'
                         ? 'bg-aura-danger'
                         : 'bg-aura-dim',
                 )}
               />
               <Badge
                 tone={
-                  item.status === 'missing' || item.status === 'duplicate'
+                  item.status === 'missing' || item.status === 'failed' || item.status === 'duplicate'
                     ? 'danger'
                     : item.status === 'corrected' || item.status === 'processing'
                       ? 'accent'

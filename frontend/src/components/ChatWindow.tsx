@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
-import { BarChart3, Download, FlaskConical, Radio } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { BarChart3, Download, FlaskConical, Radio, Play, Pause, Info, Trash2, Send } from 'lucide-react'
 import { Badge } from './AuraPrimitives'
 import { FileCard } from './FileCard'
 import { MessageBubble } from './MessageBubble'
@@ -42,6 +42,10 @@ type Props = {
   emptyState: string
   onRevealAudio?: (audio: SelectedAudio) => void
   onAnalyzeAudio?: (audio: SelectedAudio) => void
+  onDownloadPackage?: (audio: SelectedAudio) => void
+  onForward?: (audio: SelectedAudio) => void
+  onShowDetails?: (audio: SelectedAudio) => void
+  onDeleteMessage?: (messageId: string) => void
 }
 
 export function ChatWindow({
@@ -51,6 +55,10 @@ export function ChatWindow({
   emptyState,
   onRevealAudio,
   onAnalyzeAudio,
+  onDownloadPackage,
+  onForward,
+  onShowDetails,
+  onDeleteMessage,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
@@ -139,6 +147,10 @@ export function ChatWindow({
                 showNew={isIncomingAudioNew(item, currentUsername)}
                 onReveal={onRevealAudio}
                 onAnalyze={onAnalyzeAudio}
+                onDownloadPackage={onDownloadPackage}
+                onForward={onForward}
+                onShowDetails={onShowDetails}
+                onDelete={onDeleteMessage}
               />
             ) : (
               <div
@@ -156,6 +168,10 @@ export function ChatWindow({
                     showNew={isIncomingAudioNew(item, currentUsername)}
                     onReveal={onRevealAudio}
                     onAnalyze={onAnalyzeAudio}
+                    onDownloadPackage={onDownloadPackage}
+                    onForward={onForward}
+                    onShowDetails={onShowDetails}
+                    onDelete={onDeleteMessage}
                   />
                 </div>
               </div>
@@ -174,13 +190,25 @@ function AuraMessageCard({
   showNew,
   onReveal,
   onAnalyze,
+  onDownloadPackage,
+  onForward,
+  onShowDetails,
+  onDelete,
 }: {
   message: ChatMessage
   currentUsername: string
   showNew?: boolean
   onReveal?: (audio: SelectedAudio) => void
   onAnalyze?: (audio: SelectedAudio) => void
+  onDownloadPackage?: (audio: SelectedAudio) => void
+  onForward?: (audio: SelectedAudio) => void
+  onShowDetails?: (audio: SelectedAudio) => void
+  onDelete?: (messageId: string) => void
 }) {
+  const [isPlaying, setIsPlaying] = useState(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const cardRef = useRef<HTMLDivElement | null>(null)
+  
   const isOwn = message.sender === currentUsername
   const segments = (message.segments || [])
     .slice()
@@ -203,8 +231,28 @@ function AuraMessageCard({
         : message.metadata?.file_name || `${message.messageId || message.id}.wav`,
   }
 
+  const handlePlayPreview = () => {
+    if (message.type === 'audio_group') {
+      const firstAudio = cardRef.current?.querySelector('audio')
+      if (firstAudio) {
+        if (isPlaying) {
+          firstAudio.pause()
+        } else {
+          firstAudio.play()
+        }
+      }
+    } else {
+      if (!audioRef.current) return
+      if (isPlaying) {
+        audioRef.current.pause()
+      } else {
+        audioRef.current.play()
+      }
+    }
+  }
+
   return (
-    <div className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}>
+    <div ref={cardRef} className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}>
       <div className="w-full max-w-[640px] rounded-2xl bg-[linear-gradient(180deg,rgba(var(--aura-surface),0.88),rgba(var(--aura-surface-soft),0.68))] px-3.5 py-3 shadow-[0_10px_28px_rgba(0,0,0,0.10)] ring-1 ring-aura-border/8">
         <div className="mb-2.5 flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
@@ -234,40 +282,96 @@ function AuraMessageCard({
             {segments.map((segment, idx) => (
               <div key={segment.fileName} className="rounded-lg border border-aura-border/10 bg-aura-bg/28 p-2">
                 <div className="mb-1 text-[12px] font-medium text-aura-text">Part {idx + 1} of {segments.length}</div>
-                <audio controls src={resolveUrl(segment.audioUrl)} className="h-9 w-full" />
+                <audio
+                  controls
+                  src={resolveUrl(segment.audioUrl)}
+                  onPlay={idx === 0 ? () => setIsPlaying(true) : undefined}
+                  onPause={idx === 0 ? () => setIsPlaying(false) : undefined}
+                  onEnded={idx === 0 ? () => setIsPlaying(false) : undefined}
+                  className="h-9 w-full"
+                />
               </div>
             ))}
           </div>
         ) : (
           <div className="rounded-xl border border-aura-border/8 bg-aura-bg/28 p-2">
-            <audio controls src={message.audioUrl ? resolveUrl(message.audioUrl) : undefined} className="h-9 w-full" />
+            <audio
+              ref={audioRef}
+              controls
+              src={message.audioUrl ? resolveUrl(message.audioUrl) : undefined}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              onEnded={() => setIsPlaying(false)}
+              className="h-9 w-full"
+            />
           </div>
         )}
 
         <div className="mt-2.5 flex flex-wrap gap-1.5">
           <button
             type="button"
-            onClick={() => onReveal?.(selected)}
-            className="inline-flex items-center rounded-xl border border-aura-reveal/20 bg-aura-reveal/10 px-3 py-1.5 text-[12px] font-semibold text-aura-reveal transition-colors hover:bg-aura-reveal/14"
+            onClick={handlePlayPreview}
+            className="h-9 inline-flex items-center justify-center gap-1.5 rounded-xl border border-aura-border/12 bg-white/[0.02] hover:bg-white/[0.06] text-aura-text px-3 text-[12px] font-semibold transition active:scale-[0.98] disabled:cursor-not-allowed"
           >
-            <FlaskConical size={13} className="mr-1.5" />
-            Reveal
+            {isPlaying ? <Pause size={13} /> : <Play size={13} />}
+            <span>{isPlaying ? 'Pause' : 'Preview'}</span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => onDownloadPackage?.(selected)}
+            className="h-9 inline-flex items-center justify-center gap-1.5 rounded-xl border border-aura-border/12 bg-white/[0.02] hover:bg-white/[0.06] text-aura-text px-3 text-[12px] font-semibold transition active:scale-[0.98]"
+          >
+            <Download size={13} />
+            <span>Download</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onReveal?.(selected)}
+            className="h-9 inline-flex items-center justify-center gap-1.5 rounded-xl border border-aura-reveal/20 bg-aura-reveal/10 px-3 text-[12px] font-semibold text-aura-reveal transition-colors hover:bg-aura-reveal/14 active:scale-[0.98]"
+          >
+            <FlaskConical size={13} />
+            <span>Reveal</span>
+          </button>
+
           <button
             type="button"
             onClick={() => onAnalyze?.(selected)}
-            className="inline-flex items-center rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-1.5 text-[12px] font-medium text-aura-text transition-colors hover:bg-aura-bg/50"
+            className="h-9 inline-flex items-center justify-center gap-1.5 rounded-xl bg-aura-accent text-white px-3.5 text-[12px] font-semibold shadow-sm hover:opacity-90 active:scale-[0.98] transition"
           >
-            <BarChart3 size={13} className="mr-1.5" />
-            Analysis
+            <BarChart3 size={13} />
+            <span>Analyse</span>
           </button>
-          <a
-            href={resolveUrl(message.audioUrl || segments[0]?.audioUrl || '')}
-            className="inline-flex items-center rounded-xl border border-aura-border/10 bg-aura-bg/35 px-3 py-1.5 text-[12px] font-medium text-aura-text transition-colors hover:bg-aura-bg/50"
+
+          <button
+            type="button"
+            onClick={() => onForward?.(selected)}
+            className="h-9 inline-flex items-center justify-center gap-1.5 rounded-xl border border-aura-border/12 bg-white/[0.02] hover:bg-white/[0.06] text-aura-text px-3 text-[12px] font-semibold transition active:scale-[0.98]"
           >
-            <Download size={13} className="mr-1.5" />
-            Download
-          </a>
+            <Send size={13} className="rotate-[320deg]" />
+            <span>Forward</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onShowDetails?.(selected)}
+            className="h-9 inline-flex items-center justify-center gap-1.5 rounded-xl border border-aura-border/12 bg-white/[0.02] hover:bg-white/[0.06] text-aura-text px-3 text-[12px] font-semibold transition active:scale-[0.98]"
+          >
+            <Info size={13} />
+            <span>Details</span>
+          </button>
+
+          {isOwn && onDelete && (
+            <button
+              type="button"
+              onClick={() => onDelete(message.id)}
+              className="h-9 inline-flex items-center justify-center gap-1.5 rounded-xl border border-red-500/20 bg-red-500/5 hover:bg-red-500/10 text-red-400 px-3 text-[12px] font-semibold transition active:scale-[0.98]"
+            >
+              <Trash2 size={13} />
+              <span>Delete</span>
+            </button>
+          )}
         </div>
       </div>
     </div>

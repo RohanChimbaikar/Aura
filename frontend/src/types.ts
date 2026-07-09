@@ -148,6 +148,12 @@ export type ChatMessage = {
   metadata?: Partial<EncodeResult>
 }
 
+export interface PowerSpectrumPoint {
+  hz: number;
+  coverDb: number;
+  stegoDb: number;
+}
+
 export type AnalysisPayload = {
   analysisId: string
   mode?: 'single' | 'grouped'
@@ -172,12 +178,15 @@ export type AnalysisPayload = {
   message?: string | null
   elapsedMs?: number | null
   missingParts?: number[]
+  failedParts?: number[]
   filesProcessed?: number
   filesTotal?: number
   transmissionId?: string | null
   selectedPartNumber?: number | null
   selectedPartFilename?: string | null
   revealId?: string | null
+  senderDiagnostics?: Record<string, any> | null
+  receiverDiagnostics?: Record<string, any> | null
   transmissionMetrics?: {
     syncLock?: string | null
     syncBer?: number | null
@@ -193,6 +202,7 @@ export type AnalysisPayload = {
     audio_url?: string
     status: 'decoded' | 'reconstructed' | 'missing' | 'failed'
     decoded_text?: string
+    receiverStdout?: string | null
     error?: string
     metrics?: {
       syncLock?: string | null
@@ -224,11 +234,13 @@ export type AnalysisPayload = {
     correctionsApplied: boolean
     correctionsCount: number
     missingPartsCount: number
+    failedPartsCount?: number
     duplicatePartsCount: number
     overallSnrDb: number | null
     overallMse: number | null
     stftDeltaScore?: number | null
     recoveredText: string | null
+    characterAccuracy?: number | null
     trustMessage: string
   }
 
@@ -243,6 +255,7 @@ export type AnalysisPayload = {
       coverAssetId?: string | null
       stegoAssetId?: string | null
     }>
+    databaseProvenance?: Record<string, any> | null
   }
 
   charts: {
@@ -253,7 +266,7 @@ export type AnalysisPayload = {
     }>
     sequenceProgress: Array<{
       partNumber: number
-      status: 'complete' | 'corrected' | 'processing' | 'missing' | 'duplicate'
+      status: 'complete' | 'corrected' | 'processing' | 'missing' | 'failed' | 'duplicate'
     }>
     snrByChunk: Array<{
       chunkIndex: number
@@ -309,6 +322,7 @@ export type AnalysisPayload = {
     }
     signalSpectrogram?: SpectrogramMatrix
     signalWaveform?: Array<{ x: number; y: number }>
+    powerSpectrum?: PowerSpectrumPoint[];
   }
 
   chunkTable: Array<{
@@ -405,7 +419,13 @@ export type SelectedAudio = {
 export type User = {
   id: number
   username: string
+  email?: string
+  name?: string
+  profilePicture?: string
+  googleId?: string
   createdAt?: string
+  updatedAt?: string
+  lastLogin?: string
 }
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected'

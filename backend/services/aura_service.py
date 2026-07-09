@@ -11,6 +11,7 @@ import sys
 import time
 import uuid
 import wave
+import difflib
 from pathlib import Path
 from typing import Any
 
@@ -842,6 +843,383 @@ def parse_transmission_filename(name: str) -> dict[str, Any] | None:
     }
 
 
+def _json_marker_payload(output: str, marker: str) -> dict[str, Any] | None:
+    for line in reversed((output or "").splitlines()):
+        if line.startswith(marker):
+            raw = line.split(marker, 1)[1].strip()
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                return None
+            return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _int_after(label: str, output: str) -> int | None:
+    match = re.search(rf"{re.escape(label)}\s*:\s*(-?\d+)", output or "")
+    return int(match.group(1)) if match else None
+
+
+def _float_after(label: str, output: str) -> float | None:
+    match = re.search(rf"{re.escape(label)}\s*:\s*([-+]?[0-9]*\.?[0-9]+)", output or "")
+    return float(match.group(1)) if match else None
+
+
+def _string_after(label: str, output: str) -> str | None:
+    match = re.search(rf"{re.escape(label)}\s*:\s*([^\r\n]+)", output or "")
+    return match.group(1).strip() if match else None
+
+
+def _list_after(label: str, output: str) -> list[Any] | None:
+    match = re.search(rf"{re.escape(label)}\s*:\s*(\[[^\r\n]*\])", output or "")
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, list) else None
+
+
+def parse_sender_stdout(output: str) -> dict[str, Any]:
+    structured = _json_marker_payload(output, "AURA_SENDER_DIAGNOSTICS_JSON:")
+    if structured is not None:
+        return structured
+
+    return {
+        "text_repr": _string_after("Text", output),
+        "text_chars": _int_after("Chars", output),
+        "transmission_id": _int_after("Transmission ID", output),
+        "part_index": _int_after("Part Index", output),
+        "total_parts": _int_after("Total Parts", output),
+        "ecc_scheme_label": _string_after("ECC Scheme", output),
+        "codec_hint": _int_after("Codec Hint", output),
+        "required_chunks": _int_after("Required chunks", output),
+        "required_seconds": _float_after("Required seconds", output),
+        "mode": _string_after("Mode", output),
+        "chosen_cover": _string_after("Chosen cover", output),
+        "chosen_cover_duration_sec": _float_after("Cover duration", output),
+        "embed_strength": _float_after("Embed strength", output),
+        "header_nibble_count": _int_after("Header raw nibbles", output),
+        "payload_nibble_count": _int_after("Payload nibbles", output),
+        "payload_crc": _int_after("Payload CRC", output),
+        "header_checksum": _int_after("Header checksum", output),
+        "timestamp": _int_after("Header timestamp", output),
+        "header_hex": _string_after("Header hex", output),
+        "sync_pattern": _list_after("Sync pattern", output),
+        "packet_nibble_count": _int_after("Total chunks", output),
+        "repeated_payload_nibble_count": _int_after("Repeated nibbles", output),
+        "output_path": _string_after("Saved stego file", output),
+    }
+
+
+def payload_hex_length(payload_hex: str | None) -> int | None:
+    if not payload_hex:
+        return None
+    try:
+        return len(bytes.fromhex(payload_hex))
+    except ValueError:
+        return None
+
+
+RECENT_ENCODES_TEXT = {}
+
+
+def compute_character_accuracy(original: str, recovered: str) -> float:
+    if not original:
+        return 1.0 if not recovered else 0.0
+    if not recovered:
+        return 0.0
+    m, n = len(original), len(recovered)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(m + 1):
+        dp[i][0] = i
+    for j in range(n + 1):
+        dp[0][j] = j
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if original[i - 1] == recovered[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1]
+            else:
+                dp[i][j] = 1 + min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])
+    dist = dp[m][n]
+    return max(0.0, 1.0 - dist / max(1, m))
+
+
+def clean_provenance_row(row_dict: dict) -> dict:
+    cleaned = {}
+    for k, v in row_dict.items():
+        if k in ("file_path", "cover_file_path", "stego_file_path"):
+            cleaned[k] = Path(v).name if v else None
+        else:
+            cleaned[k] = v
+    return cleaned
+
+
+def query_db_provenance(message_id: str | None = None, transmission_id: str | None = None, file_name: str | None = None) -> dict[str, Any]:
+    db = get_db()
+    provenance = {
+        "analysis_runs": [],
+        "analysis_metrics": [],
+        "chunk_analysis_metrics": [],
+        "transmissions": [],
+        "stego_generations": [],
+        "audio_assets": [],
+        "transmission_parts": [],
+    }
+    if not transmission_id and message_id and message_id.startswith("tx_"):
+        transmission_id = message_id[3:]
+    ref_ids = []
+    if message_id:
+        ref_ids.append(message_id)
+    if transmission_id:
+        ref_ids.append(transmission_id)
+        ref_ids.append(f"tx_{transmission_id}")
+    if transmission_id:
+        t_rows = db.execute("SELECT * FROM transmissions WHERE transmission_id = ?", (transmission_id,)).fetchall()
+        provenance["transmissions"] = [clean_provenance_row(dict(r)) for r in t_rows]
+        tp_rows = db.execute("SELECT * FROM transmission_parts WHERE transmission_id = ? ORDER BY part_number", (transmission_id,)).fetchall()
+        provenance["transmission_parts"] = [clean_provenance_row(dict(r)) for r in tp_rows]
+        sg_rows = db.execute("SELECT * FROM stego_generations WHERE transmission_id = ? ORDER BY part_number", (transmission_id,)).fetchall()
+        provenance["stego_generations"] = [clean_provenance_row(dict(r)) for r in sg_rows]
+    elif message_id:
+        sg_rows = db.execute("SELECT * FROM stego_generations WHERE parent_message_id = ? ORDER BY COALESCE(part_number, 1)", (message_id,)).fetchall()
+        provenance["stego_generations"] = [clean_provenance_row(dict(r)) for r in sg_rows]
+    elif file_name:
+        sg_rows = db.execute(
+            """
+            SELECT sg.* FROM stego_generations sg
+            JOIN audio_assets sa ON sa.asset_id = sg.stego_asset_id
+            WHERE sa.file_path LIKE ?
+            """,
+            (f"%{file_name}",)
+        ).fetchall()
+        provenance["stego_generations"] = [clean_provenance_row(dict(r)) for r in sg_rows]
+    asset_ids = set()
+    for sg in provenance["stego_generations"]:
+        if sg.get("cover_asset_id"):
+            asset_ids.add(sg["cover_asset_id"])
+        if sg.get("stego_asset_id"):
+            asset_ids.add(sg["stego_asset_id"])
+    for tp in provenance["transmission_parts"]:
+        if tp.get("cover_asset_id"):
+            asset_ids.add(tp["cover_asset_id"])
+        if tp.get("stego_asset_id"):
+            asset_ids.add(tp["stego_asset_id"])
+    if asset_ids:
+        placeholders = ",".join("?" for _ in asset_ids)
+        aa_rows = db.execute(f"SELECT * FROM audio_assets WHERE asset_id IN ({placeholders})", list(asset_ids)).fetchall()
+        provenance["audio_assets"] = [clean_provenance_row(dict(r)) for r in aa_rows]
+    elif file_name:
+        aa_rows = db.execute("SELECT * FROM audio_assets WHERE file_path LIKE ?", (f"%{file_name}",)).fetchall()
+        provenance["audio_assets"] = [clean_provenance_row(dict(r)) for r in aa_rows]
+    if ref_ids:
+        placeholders = ",".join("?" for _ in ref_ids)
+        ar_rows = db.execute(f"SELECT * FROM analysis_runs WHERE source_ref_id IN ({placeholders}) ORDER BY created_at DESC", ref_ids).fetchall()
+        provenance["analysis_runs"] = [clean_provenance_row(dict(r)) for r in ar_rows]
+        ar_ids = [ar["analysis_id"] for ar in provenance["analysis_runs"]]
+        if ar_ids:
+            placeholders_ar = ",".join("?" for _ in ar_ids)
+            am_rows = db.execute(f"SELECT * FROM analysis_metrics WHERE analysis_id IN ({placeholders_ar})", ar_ids).fetchall()
+            provenance["analysis_metrics"] = [clean_provenance_row(dict(r)) for r in am_rows]
+            cam_rows = db.execute(f"SELECT * FROM chunk_analysis_metrics WHERE analysis_id IN ({placeholders_ar}) ORDER BY chunk_index", ar_ids).fetchall()
+            provenance["chunk_analysis_metrics"] = [clean_provenance_row(dict(r)) for r in cam_rows]
+    return provenance
+
+
+def resolve_sender_diagnostics(message_id, transmission_id, selected_part, encode):
+    if encode:
+        sd = encode.get("sender_diagnostics")
+        if isinstance(sd, list):
+            part_idx = (selected_part or 1) - 1
+            if 0 <= part_idx < len(sd):
+                return sd[part_idx]
+            return sd[0] if sd else None
+        elif isinstance(sd, dict):
+            return sd
+    db = get_db()
+    row = None
+    if transmission_id:
+        row = db.execute(
+            "SELECT * FROM stego_generations WHERE transmission_id = ? AND part_number = ?",
+            (transmission_id, selected_part or 1)
+        ).fetchone()
+        if not row:
+            row = db.execute(
+                "SELECT * FROM stego_generations WHERE transmission_id = ? ORDER BY part_number",
+                (transmission_id,)
+            ).fetchone()
+    if not row and message_id:
+        row = db.execute(
+            "SELECT * FROM stego_generations WHERE parent_message_id = ?",
+            (message_id,)
+        ).fetchone()
+    if row:
+        r = dict(row)
+        return {
+            "mode": r.get("group_role"),
+            "transmission_id": r.get("transmission_id"),
+            "part_index": (r.get("part_number") or 1) - 1,
+            "total_parts": r.get("total_parts"),
+            "payload_byte_length": r.get("payload_bits", 0) // 8 if r.get("payload_bits") else r.get("payload_chars"),
+            "payload_size": r.get("payload_chars"),
+            "required_chunks": r.get("chunk_count"),
+            "required_seconds": r.get("duration_seconds"),
+            "chosen_cover": r.get("cover_asset_id"),
+            "chosen_cover_duration_sec": r.get("cover_duration_seconds"),
+            "embed_strength": None,
+            "sample_rate": r.get("sample_rate"),
+            "chunk_seconds": r.get("carrier_chunk_duration_seconds"),
+            "encoder_version": r.get("encoder_version"),
+            "encoder_model_name": r.get("encoder_model_name"),
+            "db_generation_id": r.get("generation_id"),
+        }
+    return None
+
+
+AURA_COMMON_WORDS = {
+    "a", "an", "and", "are", "at", "be", "behind", "bring", "by", "call",
+    "come", "door", "for", "from", "go", "hello", "help", "here", "hide",
+    "home", "i", "if", "in", "is", "it", "mall", "me", "meet", "near",
+    "now", "of", "on", "outside", "park", "please", "safe", "secret",
+    "see", "send", "the", "there", "to", "tomorrow", "tonight", "wait",
+    "water", "we", "where", "you", "your",
+    "radio", "fountain"
+}
+
+
+def is_alpha_word(token):
+    return token.isalpha()
+
+
+def has_suspicious_chars(token):
+    suspicious = set("`~_^|\\/[]{}<>")
+    return any(ch in suspicious for ch in token)
+
+
+def mostly_letters(token):
+    if not token:
+        return False
+    letters = sum(ch.isalpha() for ch in token)
+    return letters >= max(1, len(token) - 2)
+
+
+def same_length_letter_score(candidate, raw_token):
+    if len(candidate) != len(raw_token):
+        return -999
+    score = 0
+    for c, r in zip(candidate.lower(), raw_token.lower()):
+        if r.isalpha():
+            if c == r:
+                score += 2
+            else:
+                score -= 1
+        else:
+            score += 1
+    return score
+
+
+def best_dictionary_match(token, vocabulary):
+    if not token:
+        return None
+    lower = token.lower()
+    if lower in vocabulary:
+        return token
+    same_len = [w for w in vocabulary if len(w) == len(token)]
+    if same_len:
+        scored = []
+        for w in same_len:
+            ratio = difflib.SequenceMatcher(None, lower, w).ratio()
+            score = same_length_letter_score(w, token) + ratio
+            scored.append((score, w))
+        scored.sort(reverse=True)
+        best_score, best_word = scored[0]
+        if best_score >= 2.5:
+            return best_word
+    matches = difflib.get_close_matches(lower, list(vocabulary), n=1, cutoff=0.6)
+    if matches:
+        return matches[0]
+    return None
+
+
+def split_preserve_whitespace(text):
+    return re.findall(r'\S+|\s+', text)
+
+
+def correct_one_token(token, vocabulary):
+    if token.isspace():
+        return token, False
+    if not any(ch.isalnum() for ch in token):
+        return token, False
+    if is_alpha_word(token):
+        return token, False
+    if not mostly_letters(token):
+        return token, False
+    if not has_suspicious_chars(token):
+        return token, False
+    suggestion = best_dictionary_match(token, vocabulary)
+    if suggestion is None:
+        return token, False
+    if token[:1].isupper():
+        suggestion = suggestion.capitalize()
+    if suggestion.lower() == token.lower():
+        return token, False
+    return suggestion, True
+
+
+def postprocess_aura_text(raw_text):
+    pieces = split_preserve_whitespace(raw_text)
+    corrected = []
+    changes = []
+    for piece in pieces:
+        new_piece, changed = correct_one_token(piece, AURA_COMMON_WORDS)
+        corrected.append(new_piece)
+        if changed:
+            changes.append({
+                "from": piece,
+                "to": new_piece
+            })
+    corrected_text = "".join(corrected)
+    return corrected_text, changes
+
+
+def build_decode_metrics(decoded: dict[str, Any] | None) -> dict[str, Any]:
+    decoded = decoded or {}
+    payload_hex = decoded.get("payload_hex")
+    return {
+        "syncLock": decoded.get("sync_lock"),
+        "syncBer": decoded.get("sync_ber"),
+        "alignmentOffsetSeconds": decoded.get("alignment_offset_seconds"),
+        "alignmentOffsetSamples": decoded.get("alignment_offset_samples"),
+        "syncShiftChunks": decoded.get("sync_shift_chunks"),
+        "uncorrectableCount": decoded.get("uncorrectable_count"),
+        "correctedBits": decoded.get("corrected_bits"),
+        "eccScheme": decoded.get("ecc_scheme"),
+        "codecHint": decoded.get("codec_hint"),
+        "payloadCrcOk": decoded.get("payload_crc_ok"),
+        "payloadCrcExpected": decoded.get("payload_crc_expected"),
+        "payloadCrcCalculated": decoded.get("payload_crc_calculated"),
+        "payloadHex": payload_hex,
+        "payloadByteLength": decoded.get("payload_byte_length") or payload_hex_length(payload_hex),
+        "decodedMessageLength": decoded.get("decoded_message_length"),
+        "totalChunks": decoded.get("total_chunks"),
+        "headerChunks": decoded.get("header_chunks"),
+        "headerVotedNibbles": decoded.get("header_voted_nibbles"),
+        "payloadChunksNeeded": decoded.get("payload_chunks_needed"),
+        "totalNeededChunks": decoded.get("total_needed_chunks"),
+        "ignoredTailChunks": decoded.get("ignored_tail_chunks"),
+        "headerTimestamp": decoded.get("header_timestamp"),
+        "headerChunkCount": decoded.get("header_chunk_count"),
+        "headerChecksumOk": decoded.get("header_checksum_ok"),
+        "headerChecksumCorrected": decoded.get("header_checksum_corrected"),
+        "headerCorrectionByte": decoded.get("header_correction_byte"),
+        "headerCorrectionBit": decoded.get("header_correction_bit"),
+        "headerChecksumReceived": decoded.get("header_checksum_received"),
+        "headerChecksumCalculated": decoded.get("header_checksum_calculated"),
+        "headerHex": decoded.get("header_hex"),
+    }
+
+
 def encode_text(text: str, ecc_scheme: int = 0, use_parity: bool = False) -> dict[str, Any]:
     ensure_dirs()
     plan = build_encode_transmission_plan(text, ecc_scheme=ecc_scheme, use_parity=use_parity)
@@ -868,6 +1246,7 @@ def encode_text(text: str, ecc_scheme: int = 0, use_parity: bool = False) -> dic
             codec_hint=0,
         )
         sender_stdout_log.append(sender_stdout)
+        sender_diagnostics = parse_sender_stdout(sender_stdout)
         cfg = load_cfg()
         provenance = save_generation_provenance(
             cover_path=cover_path,
@@ -891,6 +1270,7 @@ def encode_text(text: str, ecc_scheme: int = 0, use_parity: bool = False) -> dic
             "file_name": file_name,
             "protection": "length_header_repeat3",
             "sender_stdout": sender_stdout,
+            "sender_diagnostics": sender_diagnostics,
             "segments": [
                 {
                     "segment_index": 0,
@@ -900,6 +1280,7 @@ def encode_text(text: str, ecc_scheme: int = 0, use_parity: bool = False) -> dic
                     "payload_bytes": segment["assignedPayloadBytes"],
                     "stego_file_name": file_name,
                     "audio_url": f"/outputs/{file_name}",
+                    "sender_diagnostics": sender_diagnostics,
                     **provenance,
                 }
             ],
@@ -917,6 +1298,7 @@ def encode_text(text: str, ecc_scheme: int = 0, use_parity: bool = False) -> dic
                 ],
             },
         }
+        RECENT_ENCODES_TEXT[message_id] = normalized
         save_encode_record(message_id, result)
         return result
 
@@ -994,6 +1376,7 @@ def encode_text(text: str, ecc_scheme: int = 0, use_parity: bool = False) -> dic
             payload_bits = payload_len * 8
 
         sender_stdout_log.append(sender_stdout)
+        sender_diagnostics = parse_sender_stdout(sender_stdout)
         provenance = save_generation_provenance(
             cover_path=cover_path,
             stego_path=out_path,
@@ -1017,6 +1400,7 @@ def encode_text(text: str, ecc_scheme: int = 0, use_parity: bool = False) -> dic
                 "stego_file_name": file_name,
                 "audio_url": f"/outputs/{file_name}",
                 "is_parity": is_parity_seg,
+                "sender_diagnostics": sender_diagnostics,
                 **provenance,
             }
         )
@@ -1050,6 +1434,7 @@ def encode_text(text: str, ecc_scheme: int = 0, use_parity: bool = False) -> dic
         "file_name": first_file,
         "protection": "length_header_repeat3",
         "sender_stdout": "\n\n".join(sender_stdout_log),
+        "sender_diagnostics": [segment.get("sender_diagnostics") for segment in segments],
         "carrier_path": str(CARRIER_DIR / segments[0]["carrier_name"]),
         "carrier_alias": alias_for_carrier(CARRIER_DIR / segments[0]["carrier_name"]),
         "carrier_duration_sec": segments[0]["carrier_duration_sec"],
@@ -1069,6 +1454,7 @@ def encode_text(text: str, ecc_scheme: int = 0, use_parity: bool = False) -> dic
             ],
         },
     }
+    RECENT_ENCODES_TEXT[message_id] = normalized
     save_encode_record(message_id, result)
     return result
 
@@ -1103,8 +1489,12 @@ def decode_audio_path(path: Path, message_id: str | None = None, timeout_seconds
     props = get_wav_props(path)
     total_chunks = int(props["audio_duration_sec"] // float(cfg["chunk_seconds"]))
 
+    header_valid = parsed.get("header_checksum_ok", False)
+    payload_crc_ok = parsed.get("payload_crc_ok", True)
+    success = header_valid and (payload_crc_ok if payload_crc_ok is not None else True)
+
     result = {
-        "success": True,
+        "success": success,
         "message_id": message_id,
         "audio_url": f"/outputs/{path.name}" if path.parent == OUTPUT_DIR else "",
         "file_name": path.name,
@@ -1132,11 +1522,33 @@ def decode_audio_path(path: Path, message_id: str | None = None, timeout_seconds
         "ecc_scheme": parsed.get("ecc_scheme"),
         "codec_hint": parsed.get("codec_hint"),
         "payload_crc_ok": parsed.get("payload_crc_ok"),
+        "payload_crc_expected": parsed.get("payload_crc_expected"),
+        "payload_crc_calculated": parsed.get("payload_crc_calculated"),
         "uncorrectable_count": parsed.get("uncorrectable_count"),
         "corrected_bits": parsed.get("corrected_bits"),
         "sync_lock": parsed.get("sync_lock"),
         "sync_ber": parsed.get("sync_ber"),
+        "alignment_offset_seconds": parsed.get("alignment_offset_seconds"),
+        "alignment_offset_samples": parsed.get("alignment_offset_samples"),
+        "sync_shift_chunks": parsed.get("sync_shift_chunks"),
         "payload_hex": parsed.get("payload_hex"),
+        "payload_byte_length": parsed.get("payload_byte_length"),
+        "header_timestamp": parsed.get("header_timestamp"),
+        "header_chunk_count": parsed.get("header_chunk_count"),
+        "header_checksum_ok": parsed.get("header_checksum_ok"),
+        "header_checksum_corrected": parsed.get("header_checksum_corrected"),
+        "header_correction_byte": parsed.get("header_correction_byte"),
+        "header_correction_bit": parsed.get("header_correction_bit"),
+        "header_checksum_received": parsed.get("header_checksum_received"),
+        "header_checksum_calculated": parsed.get("header_checksum_calculated"),
+        "header_hex": parsed.get("header_hex"),
+        "header_pred_chunk_nibbles": parsed.get("header_pred_chunk_nibbles"),
+        "header_voted_nibbles_values": parsed.get("header_voted_nibbles_values"),
+        "payload_pred_chunk_nibbles": parsed.get("payload_pred_chunk_nibbles"),
+        "payload_voted_nibbles": parsed.get("payload_voted_nibbles"),
+        "sync_pattern": parsed.get("sync_pattern"),
+        "repeat_factor": parsed.get("repeat_factor"),
+        "decoder_diagnostics": parsed.get("decoder_diagnostics"),
     }
     if persist:
         save_decode_record(message_id, result)
@@ -1148,18 +1560,7 @@ def decode_audio_paths(paths: list[Path], per_file_timeout_seconds: float = 300)
 
 
 def parse_receiver_stdout(output: str) -> dict[str, Any]:
-    def int_after(label: str) -> int | None:
-        match = re.search(rf"{re.escape(label)}\s*:\s*(\d+)", output)
-        return int(match.group(1)) if match else None
-
-    def float_after(label: str) -> float | None:
-        match = re.search(rf"{re.escape(label)}\s*:\s*([0-9.]+)", output)
-        return float(match.group(1)) if match else None
-
-    def string_after(label: str) -> str | None:
-        match = re.search(rf"{re.escape(label)}\s*:\s*([^\r\n]+)", output)
-        return match.group(1).strip() if match else None
-
+    structured = _json_marker_payload(output, "AURA_DIAGNOSTICS_JSON:")
     raw_text = block_between(output, "RAW DECODED TEXT:", "-" * 20)
     corrected_text = block_between(output, "CORRECTED TEXT:", "-" * 20)
     changes_block = block_between(output, "CHANGED WORDS:", "-" * 20)
@@ -1175,28 +1576,111 @@ def parse_receiver_stdout(output: str) -> dict[str, Any]:
                 }
             )
 
+    if structured is not None:
+        structured_changes = structured.get("changes")
+        if isinstance(structured_changes, list):
+            changes = [
+                {
+                    "from": str(change.get("from", "")),
+                    "to": str(change.get("to", "")),
+                    "type": str(change.get("type") or "postprocess_correction"),
+                }
+                for change in structured_changes
+                if isinstance(change, dict)
+            ]
+        return {
+            "total_chunks": structured.get("total_chunks"),
+            "header_chunks": structured.get("header_chunks"),
+            "header_voted_nibbles": structured.get("header_voted_nibbles_count"),
+            "decoded_message_length": structured.get("decoded_message_length"),
+            "payload_chunks_needed": structured.get("payload_chunks_needed"),
+            "total_needed_chunks": structured.get("total_needed_chunks"),
+            "ignored_tail_chunks": structured.get("ignored_tail_chunks"),
+            "transmission_id": structured.get("transmission_id"),
+            "part_index": structured.get("part_index"),
+            "total_parts": structured.get("total_parts"),
+            "ecc_scheme": structured.get("ecc_scheme"),
+            "codec_hint": structured.get("codec_hint"),
+            "payload_crc_expected": structured.get("payload_crc_expected"),
+            "payload_crc_calculated": structured.get("payload_crc_calculated"),
+            "payload_crc_ok": structured.get("payload_crc_ok"),
+            "uncorrectable_count": structured.get("uncorrectable_count"),
+            "corrected_bits": structured.get("corrected_bits"),
+            "sync_lock": structured.get("sync_lock"),
+            "sync_ber": structured.get("sync_ber"),
+            "alignment_offset_seconds": structured.get("alignment_offset_seconds"),
+            "alignment_offset_samples": structured.get("alignment_offset_samples"),
+            "sync_shift_chunks": structured.get("sync_shift_chunks"),
+            "payload_hex": structured.get("payload_hex"),
+            "payload_byte_length": structured.get("payload_byte_length"),
+            "raw_text": str(structured.get("raw_text") or raw_text).strip(),
+            "corrected_text": str(structured.get("corrected_text") or corrected_text).strip(),
+            "changes": changes,
+            "header_timestamp": structured.get("header_timestamp"),
+            "header_chunk_count": structured.get("header_chunk_count"),
+            "header_checksum_ok": structured.get("header_checksum_ok"),
+            "header_checksum_corrected": structured.get("header_checksum_corrected"),
+            "header_correction_byte": structured.get("header_correction_byte"),
+            "header_correction_bit": structured.get("header_correction_bit"),
+            "header_checksum_received": structured.get("header_checksum_received"),
+            "header_checksum_calculated": structured.get("header_checksum_calculated"),
+            "header_hex": structured.get("header_hex"),
+            "header_pred_chunk_nibbles": structured.get("header_pred_chunk_nibbles"),
+            "header_voted_nibbles_values": structured.get("header_voted_nibbles"),
+            "payload_pred_chunk_nibbles": structured.get("payload_pred_chunk_nibbles"),
+            "payload_voted_nibbles": structured.get("payload_voted_nibbles"),
+            "sync_pattern": structured.get("sync_pattern"),
+            "repeat_factor": structured.get("repeat_factor"),
+            "decoder_diagnostics": structured,
+        }
+
+    correction_match = re.search(
+        r"\[header\]\s+Warning:\s+corrected single-bit flip in header at byte\s+(\d+),\s+bit\s+(\d+)",
+        output or "",
+    )
+
     return {
-        "total_chunks": int_after("Total chunks in file"),
-        "header_chunks": int_after("Header chunks"),
-        "header_voted_nibbles": int_after("Header voted nibbles"),
-        "decoded_message_length": int_after("Decoded msg length"),
-        "payload_chunks_needed": int_after("Payload chunks needed"),
-        "total_needed_chunks": int_after("Total needed chunks"),
-        "ignored_tail_chunks": int_after("Ignored tail chunks"),
-        "transmission_id": int_after("Transmission ID"),
-        "part_index": int_after("Part Index"),
-        "total_parts": int_after("Total Parts"),
-        "ecc_scheme": int_after("ECC Scheme"),
-        "codec_hint": int_after("Codec Hint"),
-        "payload_crc_ok": string_after("Payload CRC OK") == "Pass",
-        "uncorrectable_count": int_after("Uncorrectable Count"),
-        "corrected_bits": int_after("Corrected Bits"),
-        "sync_lock": string_after("Sync Lock"),
-        "sync_ber": float_after("Sync BER"),
-        "payload_hex": string_after("Payload Hex"),
+        "total_chunks": _int_after("Total chunks in file", output),
+        "header_chunks": _int_after("Header chunks", output),
+        "header_voted_nibbles": _int_after("Header voted nibbles", output),
+        "decoded_message_length": _int_after("Decoded msg length", output),
+        "payload_chunks_needed": _int_after("Payload chunks needed", output),
+        "total_needed_chunks": _int_after("Total needed chunks", output),
+        "ignored_tail_chunks": _int_after("Ignored tail chunks", output),
+        "transmission_id": _int_after("Transmission ID", output),
+        "part_index": _int_after("Part Index", output),
+        "total_parts": _int_after("Total Parts", output),
+        "ecc_scheme": _int_after("ECC Scheme", output),
+        "codec_hint": _int_after("Codec Hint", output),
+        "payload_crc_expected": _int_after("Payload CRC", output),
+        "payload_crc_calculated": _int_after("Payload CRC calculated", output),
+        "payload_crc_ok": _string_after("Payload CRC OK", output) == "Pass",
+        "uncorrectable_count": _int_after("Uncorrectable Count", output),
+        "corrected_bits": _int_after("Corrected Bits", output),
+        "sync_lock": _string_after("Sync Lock", output),
+        "sync_ber": _float_after("Sync BER", output),
+        "alignment_offset_seconds": _float_after("Alignment offset sec", output),
+        "alignment_offset_samples": _int_after("Alignment offset samples", output),
+        "sync_shift_chunks": _int_after("Sync shift chunks", output),
+        "payload_hex": _string_after("Payload Hex", output),
+        "payload_byte_length": payload_hex_length(_string_after("Payload Hex", output)),
         "raw_text": raw_text.strip(),
         "corrected_text": corrected_text.strip(),
         "changes": changes,
+        "header_timestamp": _int_after("Header timestamp", output),
+        "header_checksum_ok": _string_after("Header checksum OK", output) == "Pass" if _string_after("Header checksum OK", output) else None,
+        "header_checksum_corrected": (
+            _string_after("Header checksum corrected", output) == "Yes"
+            if _string_after("Header checksum corrected", output)
+            else bool(correction_match)
+        ),
+        "header_correction_byte": _int_after("Header correction byte", output) if _int_after("Header correction byte", output) is not None else int(correction_match.group(1)) if correction_match else None,
+        "header_correction_bit": _int_after("Header correction bit", output) if _int_after("Header correction bit", output) is not None else int(correction_match.group(2)) if correction_match else None,
+        "header_checksum_received": _int_after("Header checksum received", output),
+        "header_checksum_calculated": _int_after("Header checksum calculated", output),
+        "header_hex": _string_after("Header Hex", output),
+        "header_pred_chunk_nibbles": _list_after("Header first 12 chunk nibbles", output),
+        "payload_pred_chunk_nibbles": _list_after("Payload first 24 chunk nibbles", output),
     }
 
 
@@ -1392,10 +1876,13 @@ def recover_grouped_transmission(
                 persist=persist,
             )
             decoded_parts[idx] = decoded
-            combined_changes.extend(decoded.get("changes", []))
-            total_chunks += int(decoded.get("total_chunks") or 0)
-            payload_chunks_needed += int(decoded.get("payload_chunks_needed") or 0)
-            ignored_tail_chunks += int(decoded.get("ignored_tail_chunks") or 0)
+            if not decoded.get("header_valid", True):
+                failed_segments.append(idx)
+            else:
+                combined_changes.extend(decoded.get("changes", []))
+                total_chunks += int(decoded.get("total_chunks") or 0)
+                payload_chunks_needed += int(decoded.get("payload_chunks_needed") or 0)
+                ignored_tail_chunks += int(decoded.get("ignored_tail_chunks") or 0)
             header_valid = header_valid and bool(decoded.get("header_valid", True))
         except Exception as exc:
             import traceback
@@ -1504,15 +1991,8 @@ def recover_grouped_transmission(
                     "audio_url": dec.get("audio_url") or "",
                     "status": status,
                     "decoded_text": part_text,
-                    "metrics": {
-                        "syncLock": dec.get("sync_lock"),
-                        "syncBer": dec.get("sync_ber", 0.0),
-                        "uncorrectableCount": dec.get("uncorrectable_count", 0),
-                        "correctedBits": dec.get("corrected_bits", 0),
-                        "eccScheme": dec.get("ecc_scheme", 0),
-                        "codecHint": dec.get("codec_hint", 0),
-                        "payloadCrcOk": dec.get("payload_crc_ok", True),
-                    }
+                    "metrics": build_decode_metrics(dec),
+                    "decoder_diagnostics": dec.get("decoder_diagnostics"),
                 }
             )
         else:
@@ -1530,6 +2010,38 @@ def recover_grouped_transmission(
                 }
             )
 
+    decoder_segments = []
+    for idx in range(total_segments):
+        dec = decoded_parts.get(idx)
+        if not dec:
+            continue
+        decoder_segments.append(
+            {
+                "segmentIndex": idx,
+                "partNumber": idx + 1,
+                "fileName": dec.get("file_name") or f"tx_{resolved_tx_id}_part_{idx+1:02d}_of_{total_segments:02d}.wav",
+                "status": "reconstructed" if idx == reconstructed_idx else "decoded",
+                "rawText": dec.get("raw_text"),
+                "correctedText": dec.get("corrected_text"),
+                "changes": dec.get("changes") or [],
+                "metrics": build_decode_metrics(dec),
+                "diagnostics": dec.get("decoder_diagnostics"),
+                "receiverStdout": dec.get("receiver_stdout"),
+            }
+        )
+
+    grouped_decoder_diagnostics = {
+        "transmissionId": resolved_tx_id,
+        "totalSegments": total_segments,
+        "receivedSegments": len(decoded_parts),
+        "missingSegments": [idx + 1 for idx in missing],
+        "failedSegments": [idx + 1 for idx in failed_segments],
+        "reconstructedPart": (reconstructed_idx + 1) if reconstructed_idx is not None else None,
+        "hasParity": has_parity,
+        "parityPart": (parity_idx + 1) if parity_idx is not None else None,
+        "segments": decoder_segments,
+    }
+
     if missing or failed_segments:
         all_missing = list(set(missing + failed_segments))
         result = {
@@ -1539,11 +2051,14 @@ def recover_grouped_transmission(
             "total_segments": total_segments,
             "received_segments": total_segments - len(all_missing),
             "missing_segments": [idx + 1 for idx in all_missing],
+            "missing_segments_only": [idx + 1 for idx in missing],
+            "failed_segments": [idx + 1 for idx in failed_segments],
             "segments": ordered_segments,
             "recovery_status": "incomplete",
             "recovered_text": None,
-            "error": f"Missing segment(s): {total_segments - len(all_missing)} of {total_segments}",
+            "error": f"Missing or corrupted segment(s): {len(all_missing)} of {total_segments}",
             "changes": combined_changes,
+            "decoder_diagnostics": grouped_decoder_diagnostics,
         }
     else:
         recovered_text = "".join(recovered_parts)
@@ -1564,6 +2079,7 @@ def recover_grouped_transmission(
             "total_chunks": total_chunks,
             "payload_chunks_needed": payload_chunks_needed,
             "ignored_tail_chunks": ignored_tail_chunks,
+            "decoder_diagnostics": grouped_decoder_diagnostics,
         }
 
     if persist and resolved_tx_id:
@@ -2203,6 +2719,7 @@ def terminal_analysis_payload(
         "selectedPartNumber": source.get("selected_part_number"),
         "selectedPartFilename": source.get("selected_part_filename"),
         "missingParts": missing_parts,
+        "failedParts": [],
         "filesProcessed": files_processed,
         "filesTotal": files_total,
         "summary": {
@@ -2218,6 +2735,7 @@ def terminal_analysis_payload(
             "correctionsApplied": False,
             "correctionsCount": 0,
             "missingPartsCount": len(missing_paths),
+            "failedPartsCount": 0,
             "duplicatePartsCount": 0,
             "overallSnrDb": None,
             "overallMse": None,
@@ -2338,7 +2856,8 @@ def _build_grouped_analysis_from_reveal(
     avg_snr = round(sum(snr_values) / len(snr_values), 2) if snr_values else None
     avg_mse = round(sum(mse_values) / len(mse_values), 6) if mse_values else None
 
-    missing_parts = decode.get("missing_segments") or []
+    missing_parts = decode.get("missing_segments_only") or []
+    failed_parts = decode.get("failed_segments") or []
     changes = decode.get("changes") or []
     recovered_text = (
         decode.get("corrected_text")
@@ -2346,6 +2865,11 @@ def _build_grouped_analysis_from_reveal(
         or decode.get("raw_text")
         or ""
     )
+
+    char_accuracy = None
+    original_text = RECENT_ENCODES_TEXT.get(f"tx_{transmission_id}") or RECENT_ENCODES_TEXT.get(message_id)
+    if original_text is not None:
+        char_accuracy = compute_character_accuracy(original_text, recovered_text)
 
     recovery_success = bool(decode.get("success"))
     recovery_status = decode.get("recovery_status") or ("complete" if recovery_success else "failed")
@@ -2358,11 +2882,11 @@ def _build_grouped_analysis_from_reveal(
     integrity_score = round(integrity_score, 2)
 
     summary = {
-        "recoveryStatus": "complete" if recovery_success else ("partial" if missing_parts else "failed"),
+        "recoveryStatus": "complete" if recovery_success else ("partial" if (missing_parts or failed_parts) else "failed"),
         "recoveryConfidence": avg_conf,
         "integrityScore": integrity_score,
         "headerValid": bool(decode.get("header_valid", True)),
-        "sequenceValid": len(missing_parts) == 0,
+        "sequenceValid": len(missing_parts) == 0 and len(failed_parts) == 0,
         "filesProcessed": int(decode.get("received_segments") or len(audio_paths)),
         "filesTotal": total_files,
         "payloadChunks": int(decode.get("payload_chunks_needed") or 0),
@@ -2370,11 +2894,13 @@ def _build_grouped_analysis_from_reveal(
         "correctionsApplied": bool(changes),
         "correctionsCount": len(changes),
         "missingPartsCount": len(missing_parts),
+        "failedPartsCount": len(failed_parts),
         "duplicatePartsCount": 0,
         "overallSnrDb": avg_snr,
         "overallMse": avg_mse,
         "stftDeltaScore": None,
         "recoveredText": recovered_text or None,
+        "characterAccuracy": round(char_accuracy, 4) if char_accuracy is not None else None,
         "trustMessage": (
             "Recovery validated from available transmission evidence."
             if recovery_success and recovered_text
@@ -2400,12 +2926,18 @@ def _build_grouped_analysis_from_reveal(
 
     sequence_progress = []
     total_segments = int(decode.get("total_segments") or total_files)
-    missing_segments = set(int(x) for x in (decode.get("missing_segments") or []))
+    missing_only = set(int(x) for x in (decode.get("missing_segments_only") or []))
+    failed_only = set(int(x) for x in (decode.get("failed_segments") or []))
     for part_no in range(1, total_segments + 1):
+        status = "complete"
+        if part_no in missing_only:
+            status = "missing"
+        elif part_no in failed_only:
+            status = "failed"
         sequence_progress.append(
             {
                 "partNumber": part_no,
-                "status": "missing" if part_no in missing_segments else "complete",
+                "status": status,
             }
         )
 
@@ -2459,6 +2991,19 @@ def _build_grouped_analysis_from_reveal(
             selected_metrics = seg.get("metrics") or selected_metrics
             break
 
+    db_provenance = query_db_provenance(
+        message_id=message_id,
+        transmission_id=transmission_id,
+        file_name=selected_part_filename
+    )
+
+    sender_diag = resolve_sender_diagnostics(
+        message_id=message_id,
+        transmission_id=transmission_id,
+        selected_part=selected_part,
+        encode=encode
+    )
+
     payload = {
         "analysisId": analysis_id,
         "mode": "grouped",
@@ -2473,10 +3018,13 @@ def _build_grouped_analysis_from_reveal(
         "transmissionId": transmission_id,
         "selectedPartNumber": selected_part_number,
         "selectedPartFilename": selected_part_filename,
-        "missingParts": decode.get("missing_segments") or [],
+        "missingParts": decode.get("missing_segments_only") or [],
+        "failedParts": decode.get("failed_segments") or [],
         "filesProcessed": int(decode.get("received_segments") or total_files),
         "filesTotal": total_files,
         "summary": summary,
+        "senderDiagnostics": sender_diag,
+        "receiverDiagnostics": decode.get("decoder_diagnostics"),
         "transmissionMetrics": selected_metrics,
         "segments": segments_list,
         "provenance": {
@@ -2490,6 +3038,7 @@ def _build_grouped_analysis_from_reveal(
                 }
                 for idx in range(len(audio_paths))
             ],
+            "databaseProvenance": db_provenance,
         },
         "charts": {
             "confidenceByChunk": confidence_by_chunk,
@@ -2846,6 +3395,11 @@ def analyze_message(
             or ""
         )
 
+        char_accuracy = None
+        original_text = RECENT_ENCODES_TEXT.get(analysis_message_id)
+        if original_text is not None:
+            char_accuracy = compute_character_accuracy(original_text, recovered_text)
+
         summary = {
             "recoveryStatus": "complete" if bool(decode_result.get("success")) else "failed",
             "recoveryConfidence": avg_conf,
@@ -2859,11 +3413,13 @@ def analyze_message(
             "correctionsApplied": bool(changes),
             "correctionsCount": len(changes),
             "missingPartsCount": 0,
+            "failedPartsCount": 0,
             "duplicatePartsCount": 0,
             "overallSnrDb": avg_snr,
             "overallMse": avg_mse,
             "stftDeltaScore": None,
             "recoveredText": recovered_text or None,
+            "characterAccuracy": round(char_accuracy, 4) if char_accuracy is not None else None,
             "trustMessage": (
                 "Recovery validated from available signal evidence."
                 if recovered_text
@@ -2899,6 +3455,19 @@ def analyze_message(
             stego_waveform = build_waveform_points(stego_samples, 240)
             diff_waveform = build_waveform_points(diff_samples, 240)
 
+        db_provenance = query_db_provenance(
+            message_id=analysis_message_id,
+            transmission_id=decode_result.get("transmission_id"),
+            file_name=target_path.name
+        )
+
+        sender_diag = resolve_sender_diagnostics(
+            message_id=analysis_message_id,
+            transmission_id=decode_result.get("transmission_id"),
+            selected_part=1,
+            encode=encode
+        )
+
         payload = {
             "analysisId": analysis_id,
             "mode": "single",
@@ -2914,9 +3483,12 @@ def analyze_message(
             "selectedPartNumber": 1,
             "selectedPartFilename": target_path.name,
             "missingParts": [],
+            "failedParts": [],
             "filesProcessed": 1,
             "filesTotal": 1,
             "summary": summary,
+            "senderDiagnostics": sender_diag,
+            "receiverDiagnostics": decode_result.get("decoder_diagnostics"),
             "transmissionMetrics": {
                 "syncLock": decode_result.get("sync_lock"),
                 "syncBer": decode_result.get("sync_ber", 0.0),
@@ -2933,6 +3505,7 @@ def analyze_message(
                     "audio_url": f"/outputs/{target_path.name}" if target_path.parent == OUTPUT_DIR else "",
                     "status": "decoded",
                     "decoded_text": recovered_text,
+                    "receiverStdout": decode_result.get("receiver_stdout"),
                     "metrics": {
                         "syncLock": decode_result.get("sync_lock"),
                         "syncBer": decode_result.get("sync_ber", 0.0),
@@ -2954,6 +3527,7 @@ def analyze_message(
                         "fileName": target_path.name,
                     }
                 ],
+                "databaseProvenance": db_provenance,
             },
             "charts": {
                 "confidenceByChunk": confidence_by_chunk,

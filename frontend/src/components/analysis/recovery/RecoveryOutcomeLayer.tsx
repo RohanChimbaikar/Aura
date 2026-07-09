@@ -163,14 +163,18 @@ export function RecoveryOutcomeLayer({
       note: 'decode confidence',
     },
     {
-      label: 'Character recovery',
-      value: 'Not reported',
-      note: 'source text not emitted',
+      label: 'Character accuracy',
+      value: analysis.summary.characterAccuracy !== undefined && analysis.summary.characterAccuracy !== null
+        ? formatPercentValue(analysis.summary.characterAccuracy)
+        : 'Not computed',
+      note: analysis.summary.characterAccuracy !== undefined && analysis.summary.characterAccuracy !== null
+        ? 'plaintext character agreement'
+        : 'original plaintext unavailable',
     },
     {
       label: 'Bit accuracy',
       value: formatPercentValue(bitAccuracy),
-      note: bitAccuracy == null ? 'bit agreement absent' : 'chunk bit agreement',
+      note: bitAccuracy == null ? 'not computed' : 'chunk bit agreement',
     },
     {
       label: 'Payload size',
@@ -297,7 +301,7 @@ function getDurationLabel(analysis: AnalysisPayload, selectedAudio: SelectedAudi
     selectedAudio?.metadata?.carrier_duration_sec ??
     null
 
-  if (typeof duration !== 'number' || !Number.isFinite(duration)) return 'Not reported'
+  if (typeof duration !== 'number' || !Number.isFinite(duration)) return 'Not computed'
   const minutes = Math.floor(duration / 60)
   const seconds = Math.round(duration % 60)
   return minutes > 0 ? `${minutes}m ${String(seconds).padStart(2, '0')}s` : `${seconds}s`
@@ -313,10 +317,11 @@ function getCorruptionSummary(analysis: AnalysisPayload, insights: ChunkInsight[
   const corrections = analysis.summary.correctionsCount || 0
   const weakChunks = insights.filter((insight) => insight.tone === 'danger').length
   const missing = analysis.summary.missingPartsCount || 0
+  const failed = analysis.summary.failedPartsCount || 0
   const duplicates = analysis.summary.duplicatePartsCount || 0
 
-  if (missing || duplicates || analysis.summary.sequenceValid === false) {
-    return `Sequence diagnostics report ${missing} missing and ${duplicates} duplicate part(s). Review chunk evidence before trusting the full transmission.`
+  if (missing || failed || duplicates || analysis.summary.sequenceValid === false) {
+    return `Sequence diagnostics report ${missing} missing, ${failed} failed to decode, and ${duplicates} duplicate part(s). Review chunk evidence before trusting the full transmission.`
   }
 
   if (corrections) {
@@ -339,7 +344,7 @@ function getEccLabel(analysis: AnalysisPayload) {
   return 'No correction recorded'
 }
 function formatNullableBool(value: boolean | null | undefined) {
-  if (value == null) return 'Not reported'
+  if (value == null) return 'Not computed'
   return value ? 'Yes' : 'No'
 }
 

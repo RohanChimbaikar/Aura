@@ -1,10 +1,9 @@
-import { useState } from 'react'
-import { BarChart3, Download, FileAudio, LoaderCircle, Paperclip, Wand2 } from 'lucide-react'
+import { useState, useRef } from 'react'
+import { BarChart3, Download, FileAudio, LoaderCircle, Paperclip, Wand2, Play, Pause, Info, Trash2, Send } from 'lucide-react'
 import { Badge } from './AuraPrimitives'
 import {
   decodeAudioTransfer,
   decodeByReference,
-  getAudioUrl,
   resolveUrl,
 } from '../services/api'
 import type { AudioTransfer, DecodeResult, SelectedAudio } from '../types'
@@ -12,34 +11,42 @@ import type { AudioTransfer, DecodeResult, SelectedAudio } from '../types'
 type Props = {
   transfer: AudioTransfer
   currentUsername: string
-  /** Incoming transfer received in the last few minutes */
   showNew?: boolean
   onReveal?: (audio: SelectedAudio) => void
   onAnalyze?: (audio: SelectedAudio) => void
+  onDownloadPackage?: (audio: SelectedAudio) => void
+  onForward?: (audio: SelectedAudio) => void
+  onShowDetails?: (audio: SelectedAudio) => void
+  onDelete?: (messageId: string) => void
 }
 
-export function FileCard({ transfer, currentUsername, showNew, onReveal, onAnalyze }: Props) {
+export function FileCard({
+  transfer,
+  currentUsername,
+  showNew,
+  onReveal,
+  onAnalyze,
+  onDownloadPackage,
+  onForward,
+  onShowDetails,
+  onDelete,
+}: Props) {
   const [decodeState, setDecodeState] = useState<
     'idle' | 'loading' | 'success' | 'error'
   >('idle')
   const [decodeResult, setDecodeResult] = useState<DecodeResult | null>(null)
   const [decodeError, setDecodeError] = useState('')
+  const [isPlaying, setIsPlaying] = useState(false)
+  
+  const audioRef = useRef<HTMLAudioElement | null>(null)
 
   const isOwn = transfer.sender === currentUsername
   const direction = isOwn
     ? `Sent to ${transfer.receiver}`
     : `Received from ${transfer.sender}`
-  const isAuraGenerated = transfer.source === 'aura'
   
-  // Build the audio URL:
-  // 1. If transfer has audioUrl (from backend), use it directly via resolveUrl
-  // 2. Otherwise, fall back to getAudioUrl (for older transfers or edge cases)
-  const rawAudioUrl = transfer.audioUrl || getAudioUrl(transfer.id)
+  const rawAudioUrl = transfer.audioUrl || `/api/files/${transfer.id}/download`
   const audioUrl = resolveUrl(rawAudioUrl)
-  
-  const downloadUrl = isAuraGenerated
-    ? resolveUrl(transfer.audioUrl)
-    : resolveUrl(rawAudioUrl)
 
   const selectedAudio: SelectedAudio = {
     messageId: transfer.messageId || String(transfer.id),
@@ -71,7 +78,7 @@ export function FileCard({ transfer, currentUsername, showNew, onReveal, onAnaly
     setDecodeError('')
     setDecodeResult(null)
     try {
-      const result = isAuraGenerated && transfer.messageId
+      const result = transfer.source === 'aura' && transfer.messageId
         ? await decodeByReference(transfer.messageId, transfer.audioUrl)
         : await decodeAudioTransfer(transfer.id)
       setDecodeResult(result)
@@ -81,6 +88,15 @@ export function FileCard({ transfer, currentUsername, showNew, onReveal, onAnaly
         error instanceof Error ? error.message : 'Aura decode failed.',
       )
       setDecodeState('error')
+    }
+  }
+
+  const handlePlayPreview = () => {
+    if (!audioRef.current) return
+    if (isPlaying) {
+      audioRef.current.pause()
+    } else {
+      audioRef.current.play()
     }
   }
 
@@ -119,46 +135,89 @@ export function FileCard({ transfer, currentUsername, showNew, onReveal, onAnaly
 
       <div className="mt-3 rounded-xl bg-aura-bg/44 p-2 ring-1 ring-aura-border/7">
         <audio
+          ref={audioRef}
           controls
           preload="none"
           src={audioUrl}
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onEnded={() => setIsPlaying(false)}
           className="w-full"
         />
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <a
-          href={downloadUrl}
-          className="inline-flex items-center justify-center rounded-xl border border-aura-border/12 bg-aura-surface/30 px-3 py-2 text-sm font-medium text-aura-muted transition-colors hover:bg-aura-surface/55 hover:text-aura-text"
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          onClick={handlePlayPreview}
+          className="h-9 inline-flex items-center justify-center gap-1.5 rounded-xl border border-aura-border/12 bg-white/[0.02] hover:bg-white/[0.06] text-aura-text px-3 text-[12px] font-semibold transition active:scale-[0.98]"
         >
-          <Download size={15} className="mr-2" />
-          Download
-        </a>
+          {isPlaying ? <Pause size={13} /> : <Play size={13} />}
+          <span>{isPlaying ? 'Pause' : 'Preview'}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onDownloadPackage?.(selectedAudio)}
+          className="h-9 inline-flex items-center justify-center gap-1.5 rounded-xl border border-aura-border/12 bg-white/[0.02] hover:bg-white/[0.06] text-aura-text px-3 text-[12px] font-semibold transition active:scale-[0.98]"
+        >
+          <Download size={13} />
+          <span>Download</span>
+        </button>
 
         <button
           type="button"
           onClick={handleDecode}
           disabled={decodeState === 'loading'}
-          className="inline-flex items-center justify-center rounded-xl border border-aura-accent/32 bg-aura-accentSoft/22 px-4 py-2 text-sm font-semibold text-aura-text shadow-[0_8px_20px_rgba(0,0,0,0.10)] transition-colors hover:bg-aura-accent/24 disabled:cursor-not-allowed disabled:opacity-55"
+          className="h-9 inline-flex items-center justify-center gap-1.5 rounded-xl border border-aura-reveal/20 bg-aura-reveal/10 px-3 text-[12px] font-semibold text-aura-reveal transition-colors hover:bg-aura-reveal/14 active:scale-[0.98] disabled:cursor-not-allowed"
         >
           {decodeState === 'loading' ? (
-            <LoaderCircle size={15} className="mr-2 animate-spin" />
+            <LoaderCircle size={13} className="animate-spin" />
           ) : (
-            <Wand2 size={15} className="mr-2" />
+            <Wand2 size={13} />
           )}
-          {decodeState === 'loading' ? 'Decoding...' : 'Reveal Hidden Message'}
+          <span>{decodeState === 'loading' ? 'Decoding...' : 'Reveal'}</span>
         </button>
 
-        {onAnalyze ? (
+        {onAnalyze && (
           <button
             type="button"
             onClick={() => onAnalyze(selectedAudio)}
-            className="inline-flex items-center justify-center rounded-xl border border-aura-border/12 bg-aura-surface/30 px-3 py-2 text-sm font-medium text-aura-muted transition-colors hover:bg-aura-surface/55 hover:text-aura-text"
+            className="h-9 inline-flex items-center justify-center gap-1.5 bg-aura-accent text-white px-3.5 text-[12px] font-semibold shadow-sm hover:opacity-90 active:scale-[0.98] transition"
           >
-            <BarChart3 size={15} className="mr-2" />
-            Open in Analysis
+            <BarChart3 size={13} />
+            <span>Analyse</span>
           </button>
-        ) : null}
+        )}
+
+        <button
+          type="button"
+          onClick={() => onForward?.(selectedAudio)}
+          className="h-9 inline-flex items-center justify-center gap-1.5 rounded-xl border border-aura-border/12 bg-white/[0.02] hover:bg-white/[0.06] text-aura-text px-3 text-[12px] font-semibold transition active:scale-[0.98]"
+        >
+          <Send size={13} className="rotate-[320deg]" />
+          <span>Forward</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onShowDetails?.(selectedAudio)}
+          className="h-9 inline-flex items-center justify-center gap-1.5 rounded-xl border border-aura-border/12 bg-white/[0.02] hover:bg-white/[0.06] text-aura-text px-3 text-[12px] font-semibold transition active:scale-[0.98]"
+        >
+          <Info size={13} />
+          <span>Details</span>
+        </button>
+
+        {isOwn && onDelete && (
+          <button
+            type="button"
+            onClick={() => onDelete(String(transfer.id))}
+            className="h-9 inline-flex items-center justify-center gap-1.5 rounded-xl border border-red-500/20 bg-red-500/5 hover:bg-red-500/10 text-red-400 px-3 text-[12px] font-semibold transition active:scale-[0.98]"
+          >
+            <Trash2 size={13} />
+            <span>Delete</span>
+          </button>
+        )}
       </div>
 
       {decodeState === 'success' && decodeResult ? (

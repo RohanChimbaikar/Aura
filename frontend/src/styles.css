@@ -6,20 +6,24 @@
 
 :root {
   color-scheme: dark;
-  --aura-bg: 12 13 15;
-  --aura-surface: 18 19 23;
-  --aura-surface-soft: 24 26 31;
-  --aura-border: 176 184 198;
-  --aura-text: 238 241 245;
-  --aura-muted: 143 151 165;
-  --aura-dim: 88 96 111;
-  --aura-accent: 126 132 184;
-  --aura-accent-soft: 126 132 184;
-  --aura-reveal: 91 173 190;
-  --aura-reveal-soft: 91 173 190;
-  --aura-danger: 232 116 101;
-  --aura-panel: 18 19 23;
-  --aura-panel-soft: 24 26 31;
+  /* Semantic theme tokens - Dark Mode */
+  --aura-bg: 15 23 42;
+  --aura-surface: 17 24 39;
+  --aura-surface-secondary: 30 41 59;
+  --aura-border: 51 65 85;
+  --aura-primary-text: 248 250 252;
+  --aura-secondary-text: 203 213 225;
+  --aura-accent: 79 142 247;
+  --aura-success: 34 197 94;
+  --aura-warning: 245 158 11;
+  --aura-danger: 239 68 68;
+  /* Legacy tokens for compatibility */
+  --aura-text: 248 250 252;
+  --aura-muted: 203 213 225;
+  --aura-dim: 148 163 184;
+  --aura-reveal: 79 142 247;
+  --aura-panel: 17 24 39;
+  --aura-panel-soft: 30 41 59;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -28,20 +32,24 @@
 
 .theme-light {
   color-scheme: light;
-  --aura-bg: 246 244 240;
-  --aura-surface: 253 252 249;
-  --aura-surface-soft: 238 237 233;
-  --aura-border: 93 101 118;
-  --aura-text: 24 27 33;
-  --aura-muted: 91 98 112;
-  --aura-dim: 128 134 146;
-  --aura-accent: 95 105 153;
-  --aura-accent-soft: 95 105 153;
-  --aura-reveal: 48 132 148;
-  --aura-reveal-soft: 48 132 148;
-  --aura-danger: 188 86 72;
-  --aura-panel: 253 252 249;
-  --aura-panel-soft: 238 237 233;
+  /* Semantic theme tokens - Light Mode */
+  --aura-bg: 244 247 251;
+  --aura-surface: 255 255 255;
+  --aura-surface-secondary: 248 250 253;
+  --aura-border: 220 231 240;
+  --aura-primary-text: 15 23 42;
+  --aura-secondary-text: 71 85 105;
+  --aura-accent: 79 142 247;
+  --aura-success: 34 197 94;
+  --aura-warning: 245 158 11;
+  --aura-danger: 239 68 68;
+  /* Legacy tokens for compatibility */
+  --aura-text: 15 23 42;
+  --aura-muted: 71 85 105;
+  --aura-dim: 100 116 139;
+  --aura-reveal: 79 142 247;
+  --aura-panel: 255 255 255;
+  --aura-panel-soft: 248 250 253;
 }
 
 * {

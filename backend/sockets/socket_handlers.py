@@ -1,10 +1,14 @@
-from flask import session
+from flask import session, request
 from flask_socketio import SocketIO, emit, join_room
 import sys
+from flask_jwt_extended import decode_token
 
 from services.auth_service import get_user_by_username
 from services.file_service import utc_iso_timestamp
 from services.message_service import create_message
+
+
+CONNECTED_USERS = set()
 
 
 socketio = SocketIO(
@@ -22,11 +26,57 @@ def init_socketio(app) -> None:
 def handle_connect():
     username = session.get("username")
     if not username:
+        # Parse access token cookie directly
+        access_token = request.cookies.get("access_token_cookie")
+        if access_token:
+            try:
+                decoded = decode_token(access_token)
+                username = decoded.get("sub")
+            except Exception:
+                pass
+        
+        # Check refresh token cookie if access token cookie was invalid or expired
+        if not username:
+            refresh_token = request.cookies.get("refresh_token_cookie")
+            if refresh_token:
+                try:
+                    decoded = decode_token(refresh_token)
+                    username = decoded.get("sub")
+                except Exception:
+                    pass
+
+    if not username:
+        print("[socket] connection rejected, unauthorized", file=sys.stderr)
         return False
 
     join_room(username)
+    CONNECTED_USERS.add(username)
     print(f"[socket] connected username={username} joined room={username}", file=sys.stderr)
-    emit("presence", {"username": username, "status": "online"})
+    
+    # Broadcast to all clients that this user is online
+    socketio.emit("presence", {"username": username, "status": "online"})
+    # Send the roster of currently online users to the newly connected user
+    emit("online_users", list(CONNECTED_USERS))
+
+
+@socketio.on("disconnect")
+def handle_disconnect():
+    username = session.get("username")
+    if not username:
+        access_token = request.cookies.get("access_token_cookie")
+        if access_token:
+            try:
+                decoded = decode_token(access_token)
+                username = decoded.get("sub")
+            except Exception:
+                pass
+                
+    if username:
+        if username in CONNECTED_USERS:
+            CONNECTED_USERS.remove(username)
+        print(f"[socket] disconnected username={username}", file=sys.stderr)
+        # Broadcast that this user is offline
+        socketio.emit("presence", {"username": username, "status": "offline"})
 
 
 @socketio.on("send_message")

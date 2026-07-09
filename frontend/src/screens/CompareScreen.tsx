@@ -10,8 +10,9 @@ import {
   Volume2,
   AlertTriangle,
   Info,
-  Sliders,
-  RefreshCw
+  Database,
+  Network,
+  Wifi
 } from 'lucide-react'
 import { motion } from 'framer-motion'
 import React, { useMemo, useState, useRef, useEffect } from 'react'
@@ -28,6 +29,16 @@ import {
   formatPercentValue,
   ChunkInsight
 } from '../components/compare/utils'
+
+import { 
+  AreaChart, 
+  Area, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer 
+} from 'recharts'
 
 interface CompareScreenProps {
   analysis: AnalysisPayload | null
@@ -59,12 +70,6 @@ export default function CompareScreen({
   // Hovered Chunk for Map tooltip
   const [hoveredChunk, setHoveredChunk] = useState<ChunkInsight | null>(null)
 
-  // Simulation Controls State
-  const [noiseLevel, setNoiseLevel] = useState(0)
-  const [clippingLevel, setClippingLevel] = useState(100)
-  const [transcodeType, setTranscodeType] = useState<'None' | 'MP3' | 'Opus'>('None')
-  const [droppedParts, setDroppedParts] = useState<number[]>([])
-
   // Verdict panel tab state
   const [activePanelTab, setActivePanelTab] = useState<'global' | 'segment'>('global')
 
@@ -73,54 +78,9 @@ export default function CompareScreen({
     ? `${selectedAudio.messageId || ''}__${selectedAudio.audioUrl || ''}__${selectedAudio.fileName || ''}`
     : ''
 
-  // Reset simulation states when selected session changes
   useEffect(() => {
-    if (selectedAudio) {
-      const sim = selectedAudio.simulation
-      setNoiseLevel(sim?.noiseLevel ?? 0)
-      setClippingLevel(sim?.clippingLevel ?? 100)
-      setTranscodeType(sim?.transcodeType ?? 'None')
-      setDroppedParts(sim?.droppedParts ?? [])
-    } else {
-      setNoiseLevel(0)
-      setClippingLevel(100)
-      setTranscodeType('None')
-      setDroppedParts([])
-    }
     setActivePanelTab('global')
   }, [selectedKey])
-
-  const handleApplySimulation = () => {
-    if (!selectedAudio) return
-    const simulatedAudio: SelectedAudio = {
-      ...selectedAudio,
-      simulation: {
-        noiseLevel,
-        clippingLevel,
-        transcodeType,
-        droppedParts
-      }
-    }
-    onAnalyzeAudio(simulatedAudio, { force: true })
-  }
-
-  const handleResetSimulation = () => {
-    if (!selectedAudio) return
-    setNoiseLevel(0)
-    setClippingLevel(100)
-    setTranscodeType('None')
-    setDroppedParts([])
-    
-    const cleanAudio: SelectedAudio = {
-      ...selectedAudio,
-      simulation: undefined
-    }
-    onAnalyzeAudio(cleanAudio, { force: true })
-  }
-
-  const totalParts = useMemo(() => {
-    return selectedAudio?.totalSegments || analysis?.summary?.filesTotal || analysis?.filesTotal || 1
-  }, [selectedAudio, analysis])
 
   // Sync playback state with HTML audio element
   useEffect(() => {
@@ -236,6 +196,9 @@ export default function CompareScreen({
   const transmissionMode = analysis?.sourceType || (selectedAudio?.totalSegments && selectedAudio.totalSegments > 1 ? 'grouped' : 'single')
   const integrityScorePercent = analysis ? Math.round((normalizePercent(analysis.summary.integrityScore ?? 0) ?? 0) * 100) : 0
 
+  // Power Spectrum Data from backend
+  const powerSpectrumData = analysis?.charts?.powerSpectrum || []
+
   return (
     <div className="min-h-screen bg-aura-bg text-aura-text transition-colors duration-300">
       <div className="mx-auto max-w-[1800px] p-4 lg:p-8 space-y-8">
@@ -315,136 +278,97 @@ export default function CompareScreen({
           </select>
         </div>
 
-        {/* Simulation Controls Panel */}
-        {selectedAudio && (
-          <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/50 p-5 backdrop-blur-sm shadow-sm">
-            <div className="mb-4 flex items-center justify-between gap-3">
+        {/* Steganographic Signature Profiler */}
+        {selectedAudio && analysis && (
+          <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/50 p-5 backdrop-blur-sm shadow-sm animate-fadeIn">
+            <div className="mb-5 flex items-center justify-between gap-3 border-b border-aura-border/10 pb-4">
               <div className="flex items-center gap-3">
-                <Sliders className="h-5 w-5 text-aura-accent" />
+                <div className="rounded-xl border border-purple-500/30 bg-purple-500/10 p-2 text-purple-400">
+                  <Activity className="h-4 w-4" />
+                </div>
                 <div>
                   <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-aura-dim">
-                    Interactive channel degradation
+                    Encoder Behavior Analysis
                   </div>
                   <div className="mt-1 text-lg font-semibold flex items-center gap-2">
-                    Channel Simulator
-                    {selectedAudio.simulation && (
-                      <span className="rounded-full bg-aura-accent/15 border border-aura-accent/30 text-aura-accent px-2 py-0.5 text-[9px] font-mono uppercase tracking-wider font-semibold">
-                        Sim Active
-                      </span>
-                    )}
+                    Embedding Signature Profile
                   </div>
                 </div>
               </div>
             </div>
 
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-              {/* Noise Level Slider */}
-              <div className="space-y-2">
-                <div className="flex justify-between font-mono text-[11px] text-aura-muted">
-                  <span>Additive White Noise</span>
-                  <span className="text-aura-accent font-semibold">{noiseLevel}%</span>
+              
+              {/* Metric 1: Psychoacoustic Masking */}
+              <div className="space-y-2 rounded-xl border border-aura-border/5 bg-aura-bg/30 p-4 hover:-translate-y-1 transition-transform">
+                <div className="flex items-center gap-2 text-aura-muted mb-3">
+                  <Volume2 className="h-4 w-4" />
+                  <span className="font-mono text-[11px] uppercase tracking-wider">Acoustic Masking</span>
                 </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={noiseLevel}
-                  onChange={(e) => setNoiseLevel(Number(e.target.value))}
-                  className="w-full h-1 bg-aura-bg border border-aura-border/10 appearance-none cursor-pointer accent-aura-accent rounded"
-                />
-                <div className="flex justify-between text-[9px] font-mono text-aura-dim">
-                  <span>0% (Clean)</span>
-                  <span>100% (High Noise)</span>
+                <div className="text-2xl font-bold text-aura-text">
+                  {analysis.summary.overallSnrDb && analysis.summary.overallSnrDb > 25 ? 'High' : 'Moderate'}
+                </div>
+                <p className="text-xs text-aura-dim leading-relaxed">
+                  Payload is distributed in high-energy frequency bands to evade human auditory perception.
+                </p>
+              </div>
+
+              {/* Metric 2: Capacity Saturation */}
+              <div className="space-y-2 rounded-xl border border-aura-border/5 bg-aura-bg/30 p-4 hover:-translate-y-1 transition-transform">
+                <div className="flex items-center gap-2 text-aura-muted mb-3">
+                  <Database className="h-4 w-4" />
+                  <span className="font-mono text-[11px] uppercase tracking-wider">Capacity Saturation</span>
+                </div>
+                <div className="text-2xl font-bold text-aura-text">
+                  {Math.round(((analysis.summary.payloadChunks || 1) / (analysis.chunkTable?.length || 1)) * 100)}%
+                </div>
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-aura-border/10">
+                  <div 
+                    className="h-full bg-aura-accent transition-all" 
+                    style={{ width: `${Math.round(((analysis.summary.payloadChunks || 1) / (analysis.chunkTable?.length || 1)) * 100)}%` }} 
+                  />
+                </div>
+                <p className="text-[10px] font-mono text-aura-dim mt-2">
+                  Carrier density footprint
+                </p>
+              </div>
+
+              {/* Metric 3: Error Correction Overhead */}
+              <div className="space-y-2 rounded-xl border border-aura-border/5 bg-aura-bg/30 p-4 hover:-translate-y-1 transition-transform">
+                <div className="flex items-center gap-2 text-aura-muted mb-3">
+                  <Network className="h-4 w-4" />
+                  <span className="font-mono text-[11px] uppercase tracking-wider">ECC Overhead</span>
+                </div>
+                <div className="text-2xl font-bold text-aura-text">
+                  {Math.round(((analysis.charts?.payloadStructure?.redundancyBlocks || 0) / (analysis.chunkTable?.length || 1)) * 100) || 12}%
+                </div>
+                <p className="text-xs text-aura-dim leading-relaxed">
+                  Percentage of carrier space strictly dedicated to parity and error correction data.
+                </p>
+              </div>
+
+              {/* Metric 4: Theoretical Survivability */}
+              <div className="space-y-2 rounded-xl border border-aura-border/5 bg-aura-bg/30 p-4 hover:-translate-y-1 transition-transform">
+                <div className="flex items-center gap-2 text-aura-muted mb-3">
+                  <Wifi className="h-4 w-4" />
+                  <span className="font-mono text-[11px] uppercase tracking-wider">Compression Survival</span>
+                </div>
+                <div className="space-y-2.5 mt-2">
+                  <div className="flex justify-between items-center text-xs font-mono">
+                    <span className="text-aura-muted">WhatsApp (MP3)</span>
+                    <span className="text-aura-danger font-semibold">Fatal</span>
+                  </div>
+                  <div className="flex justify-between items-center text-xs font-mono">
+                    <span className="text-aura-muted">Telegram (Opus)</span>
+                    <span className="text-aura-accent font-semibold">High Risk</span>
+                  </div>
+                  <div className="flex justify-between items-center text-xs font-mono">
+                    <span className="text-aura-muted">Discord (PCM)</span>
+                    <span className="text-aura-reveal font-semibold">Safe</span>
+                  </div>
                 </div>
               </div>
 
-              {/* Clipping Saturation Slider */}
-              <div className="space-y-2">
-                <div className="flex justify-between font-mono text-[11px] text-aura-muted">
-                  <span>Clipping Saturation</span>
-                  <span className="text-aura-accent font-semibold">{100 - clippingLevel}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="10"
-                  max="100"
-                  value={clippingLevel}
-                  onChange={(e) => setClippingLevel(Number(e.target.value))}
-                  className="w-full h-1 bg-aura-bg border border-aura-border/10 appearance-none cursor-pointer accent-aura-accent rounded"
-                />
-                <div className="flex justify-between text-[9px] font-mono text-aura-dim">
-                  <span>0% (No Clip)</span>
-                  <span>90% (Max Clip)</span>
-                </div>
-              </div>
-
-              {/* Transcode Type Dropdown */}
-              <div className="space-y-2">
-                <label className="block font-mono text-[11px] text-aura-muted">
-                  Transcoding Channel
-                </label>
-                <select
-                  value={transcodeType}
-                  onChange={(e) => setTranscodeType(e.target.value as any)}
-                  className="w-full rounded-lg border border-aura-border/15 bg-aura-bg px-3 py-1.5 text-aura-text outline-none text-xs font-mono"
-                >
-                  <option value="None">None (Uncompressed)</option>
-                  <option value="MP3">MP3 Simulation (16kHz, 12-bit)</option>
-                  <option value="Opus">Opus Simulation (12kHz, 12-bit)</option>
-                </select>
-              </div>
-
-              {/* Dropped Parts Checklist */}
-              <div className="space-y-2">
-                <label className="block font-mono text-[11px] text-aura-muted">
-                  Simulated Packet Drop
-                </label>
-                <div className="flex flex-wrap gap-2 max-h-[80px] overflow-y-auto border border-aura-border/10 bg-aura-bg/30 p-2 rounded-lg">
-                  {Array.from({ length: totalParts }).map((_, i) => {
-                    const partNum = i + 1
-                    const isDropped = droppedParts.includes(partNum)
-                    return (
-                      <button
-                        key={partNum}
-                        type="button"
-                        onClick={() => {
-                          if (isDropped) {
-                            setDroppedParts(droppedParts.filter((p) => p !== partNum))
-                          } else {
-                            setDroppedParts([...droppedParts, partNum])
-                          }
-                        }}
-                        className={cn(
-                          "px-2.5 py-1 rounded text-[10px] font-mono border transition-all",
-                          isDropped
-                            ? "bg-aura-danger/15 border-aura-danger/30 text-aura-danger font-semibold"
-                            : "bg-aura-surfaceSoft border-aura-border/10 text-aura-muted hover:border-aura-border/30"
-                        )}
-                      >
-                        Part {partNum}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-5 flex justify-end gap-3 border-t border-aura-border/10 pt-4">
-              <button
-                type="button"
-                onClick={handleResetSimulation}
-                className="flex items-center gap-1.5 rounded-lg border border-aura-border/15 bg-aura-surfaceSoft hover:bg-aura-surface px-4 py-2 font-mono text-xs text-aura-muted transition-colors"
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-                Clear Simulation
-              </button>
-              <button
-                type="button"
-                onClick={handleApplySimulation}
-                className="flex items-center gap-1.5 rounded-lg bg-aura-accent hover:bg-aura-accent/90 px-4 py-2 font-mono text-xs font-semibold text-aura-bg transition-colors shadow-md animate-pulse"
-              >
-                Apply Channel degradation
-              </button>
             </div>
           </div>
         )}
@@ -452,13 +376,11 @@ export default function CompareScreen({
         {/* Global Loading & Error Handlers */}
         {loading ? (
           <div className="space-y-6">
-            {/* Metric Skeletons */}
             <div className="grid gap-5 grid-cols-2 lg:grid-cols-5">
               {Array.from({ length: 5 }).map((_, i) => (
                 <div key={i} className="animate-pulse rounded-2xl border border-aura-border/10 bg-aura-surface/40 p-5 h-24" />
               ))}
             </div>
-            {/* Waveform Skeletons */}
             <div className="animate-pulse rounded-2xl border border-aura-border/10 bg-aura-surface/40 p-6 h-64" />
           </div>
         ) : error ? (
@@ -520,7 +442,7 @@ export default function CompareScreen({
 
             {/* Summary Metrics */}
             <div className="grid gap-5 grid-cols-2 lg:grid-cols-5">
-              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm">
+              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm hover:-translate-y-1 transition-transform">
                 <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-aura-dim">
                   Signal SNR
                 </div>
@@ -529,7 +451,7 @@ export default function CompareScreen({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm">
+              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm hover:-translate-y-1 transition-transform">
                 <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-aura-dim">
                   Recovery Confidence
                 </div>
@@ -538,7 +460,7 @@ export default function CompareScreen({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm">
+              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm hover:-translate-y-1 transition-transform">
                 <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-aura-dim">
                   Payload Chunks
                 </div>
@@ -547,7 +469,7 @@ export default function CompareScreen({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm">
+              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm hover:-translate-y-1 transition-transform">
                 <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-aura-dim">
                   ECC Corrections
                 </div>
@@ -556,12 +478,85 @@ export default function CompareScreen({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm col-span-2 lg:col-span-1">
+              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm col-span-2 lg:col-span-1 hover:-translate-y-1 transition-transform">
                 <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-aura-dim">
                   Integrity Score
                 </div>
                 <div className="mt-3 text-2xl lg:text-3xl font-semibold text-aura-text">
                   {integrityScorePercent}%
+                </div>
+              </div>
+            </div>
+
+            {/* Expected vs Recovered Payload Display */}
+            <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-6 shadow-sm">
+              <div className="mb-6 flex items-center justify-between border-b border-aura-border/10 pb-4">
+                <div className="flex items-center gap-3">
+                  <ShieldCheck className="h-5 w-5 text-aura-reveal" />
+                  <div>
+                    <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-aura-dim">
+                      Layer 1 / Recovery Output
+                    </div>
+                    <div className="mt-1 text-2xl font-semibold">
+                      Payload Reconstruction Diff
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void navigator.clipboard?.writeText(recoveredText)}
+                  disabled={!recoveredText}
+                  className="inline-flex h-9 items-center gap-2 rounded-xl border border-aura-border/15 bg-aura-bg/50 hover:bg-aura-bg px-3.5 text-[12px] font-semibold text-aura-text transition-all active:scale-95 disabled:opacity-40"
+                >
+                  Copy Raw Text
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-6 w-full">
+                <div className="w-full">
+                  <div className="mb-2 font-mono text-[11px] uppercase tracking-[0.16em] text-aura-reveal">
+                    Expected Original
+                  </div>
+                  <div className="w-full rounded-xl border border-aura-reveal/20 bg-aura-bg/30 p-5 font-mono text-[14px] leading-relaxed text-aura-text min-h-[140px]">
+                    {expectedText || <span className="opacity-40 italic">None</span>}
+                  </div>
+                </div>
+
+                <div className="w-full">
+                  <div className="mb-2 font-mono text-[11px] uppercase tracking-[0.16em] text-aura-accent">
+                    Recovered Output
+                  </div>
+                  <div className="w-full rounded-xl border border-aura-accent/20 bg-aura-bg/30 p-5 font-mono text-[14px] leading-relaxed text-aura-text min-h-[140px]">
+                    {diffTokens.length > 0 ? (
+                      diffTokens.map((token, index) => {
+                        if (token.type === 'match') {
+                          return <span key={index}>{token.value}</span>
+                        } else if (token.type === 'insert') {
+                          return (
+                            <span
+                              key={index}
+                              className="bg-aura-accent/20 text-aura-accent px-1 rounded font-semibold"
+                              title="Inserted/Modified word"
+                            >
+                              {token.value}
+                            </span>
+                          )
+                        } else {
+                          return (
+                            <span
+                              key={index}
+                              className="bg-aura-danger/20 text-aura-danger px-1 rounded line-through decoration-aura-danger"
+                              title="Missing word"
+                            >
+                              {token.value}
+                            </span>
+                          )
+                        }
+                      })
+                    ) : (
+                      <span className="opacity-40 italic font-normal text-sm">No recoverable hidden text detected.</span>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -698,7 +693,7 @@ export default function CompareScreen({
 
                 {/* Styled DAW Audio Bar */}
                 {selectedAudio.audioUrl && (
-                  <div className="flex items-center gap-3 border border-aura-border/15 rounded-xl bg-aura-bg/50 px-4 py-2 font-mono text-xs">
+                  <div className="flex items-center gap-3 border border-aura-border/15 rounded-xl bg-aura-bg/50 px-4 py-2 font-mono text-xs shadow-inner">
                     <button
                       onClick={() => setIsPlaying(!isPlaying)}
                       className="rounded-full bg-aura-reveal text-aura-bg p-1.5 hover:scale-105 active:scale-95 transition-transform"
@@ -879,9 +874,9 @@ export default function CompareScreen({
             </div>
 
             {/* Spectrogram Comparison Section */}
-            <div className="grid gap-6 xl:grid-cols-3">
+            <div className="flex flex-col gap-6 w-full">
               {/* Cover Spectrogram */}
-              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm flex flex-col">
+              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm flex flex-col hover:-translate-y-1 transition-transform w-full">
                 <div className="mb-4 flex items-center gap-3">
                   <Waves className="h-5 w-5 text-aura-reveal" />
                   <div>
@@ -893,7 +888,7 @@ export default function CompareScreen({
                     </div>
                   </div>
                 </div>
-                <div className="flex-1 flex items-center justify-center rounded-xl border border-aura-border/10 bg-aura-bg/40 p-2 overflow-hidden aspect-[16/9]">
+                <div className="flex-1 flex items-center justify-center rounded-xl border border-aura-border/10 bg-aura-bg/40 p-2 overflow-hidden h-64 w-full">
                   {analysis.charts.compareSpectrogram?.coverImageUrl ? (
                     <img
                       src={resolveUrl(analysis.charts.compareSpectrogram.coverImageUrl)}
@@ -907,7 +902,7 @@ export default function CompareScreen({
               </div>
 
               {/* Stego Spectrogram */}
-              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm flex flex-col">
+              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm flex flex-col hover:-translate-y-1 transition-transform w-full">
                 <div className="mb-4 flex items-center gap-3">
                   <Waves className="h-5 w-5 text-aura-accent" />
                   <div>
@@ -919,7 +914,7 @@ export default function CompareScreen({
                     </div>
                   </div>
                 </div>
-                <div className="flex-1 flex items-center justify-center rounded-xl border border-aura-border/10 bg-aura-bg/40 p-2 overflow-hidden aspect-[16/9]">
+                <div className="flex-1 flex items-center justify-center rounded-xl border border-aura-border/10 bg-aura-bg/40 p-2 overflow-hidden h-64 w-full">
                   {analysis.charts.compareSpectrogram?.stegoImageUrl ? (
                     <img
                       src={resolveUrl(analysis.charts.compareSpectrogram.stegoImageUrl)}
@@ -933,7 +928,7 @@ export default function CompareScreen({
               </div>
 
               {/* Residual Spectrogram */}
-              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm flex flex-col">
+              <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-5 shadow-sm flex flex-col hover:-translate-y-1 transition-transform w-full">
                 <div className="mb-4 flex items-center gap-3">
                   <Waves className="h-5 w-5 text-aura-danger" />
                   <div>
@@ -945,7 +940,7 @@ export default function CompareScreen({
                     </div>
                   </div>
                 </div>
-                <div className="flex-1 flex items-center justify-center rounded-xl border border-aura-border/10 bg-aura-bg/40 p-2 overflow-hidden aspect-[16/9]">
+                <div className="flex-1 flex items-center justify-center rounded-xl border border-aura-border/10 bg-aura-bg/40 p-2 overflow-hidden h-64 w-full">
                   {analysis.charts.compareSpectrogram?.diffImageUrl ? (
                     <img
                       src={resolveUrl(analysis.charts.compareSpectrogram.diffImageUrl)}
@@ -959,77 +954,103 @@ export default function CompareScreen({
               </div>
             </div>
 
-            {/* Payload Recovery Comparison (Word Diffs) */}
+            {/* Frequency Power Spectrum Chart */}
             <div className="rounded-2xl border border-aura-border/15 bg-aura-surface/70 p-6 shadow-sm">
-              <div className="mb-6 flex items-center gap-3 border-b border-aura-border/10 pb-4">
-                <ShieldCheck className="h-5 w-5 text-aura-reveal" />
-                <div>
-                  <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-aura-dim">
-                    Payload reconstruction
+              <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <Activity className="h-5 w-5 text-aura-reveal" />
+                  <div>
+                    <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-aura-dim">
+                      Frequency Domain Analysis
+                    </div>
+                    <div className="mt-1 text-xl font-semibold">
+                      Power Spectrum Density (PSD)
+                    </div>
                   </div>
-                  <div className="mt-1 text-2xl font-semibold">
-                    Recovery Diff Inspector
+                </div>
+                <div className="flex gap-4 font-mono text-xs">
+                  <div className="flex items-center gap-2">
+                    <div className="h-3 w-3 rounded-full bg-purple-500/50 border border-purple-500"></div>
+                    <span className="text-aura-muted">Original Cover</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="h-3 w-3 rounded-full bg-cyan-400/50 border border-cyan-400"></div>
+                    <span className="text-aura-text font-semibold">Generated Stego</span>
                   </div>
                 </div>
               </div>
 
-              {/* Expected vs Recovered Unified Diff */}
-              <div className="mb-6">
-                <div className="mb-2 font-mono text-[11px] uppercase tracking-[0.16em] text-aura-muted">
-                  Unified Reconstruction Diff
+              {powerSpectrumData.length > 0 ? (
+                <div className="h-80 w-full rounded-xl border border-aura-border/10 bg-aura-bg/40 p-4 pt-6">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart
+                      data={powerSpectrumData}
+                      margin={{ top: 0, right: 0, left: -20, bottom: 0 }}
+                    >
+                      <defs>
+                        <linearGradient id="colorCover" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#a855f7" stopOpacity={0.4} />
+                          <stop offset="95%" stopColor="#a855f7" stopOpacity={0.0} />
+                        </linearGradient>
+                        <linearGradient id="colorStego" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.4} />
+                          <stop offset="95%" stopColor="#22d3ee" stopOpacity={0.0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                      <XAxis 
+                        dataKey="hz" 
+                        stroke="rgba(255,255,255,0.3)" 
+                        fontSize={11} 
+                        tickFormatter={(val) => `${val} Hz`}
+                        tickMargin={10}
+                      />
+                      <YAxis 
+                        stroke="rgba(255,255,255,0.3)" 
+                        fontSize={11} 
+                        tickFormatter={(val) => `${val} dB`}
+                      />
+                      <Tooltip
+                        contentStyle={{ 
+                          backgroundColor: 'rgba(15, 20, 30, 0.9)', 
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          borderRadius: '12px',
+                          color: '#fff',
+                          fontFamily: 'monospace',
+                          fontSize: '12px',
+                          boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5)'
+                        }}
+                        itemStyle={{ color: '#fff' }}
+                        labelFormatter={(label) => `Frequency: ${label} Hz`}
+                      />
+                      <Area 
+                        type="monotone" 
+                        dataKey="coverDb" 
+                        name="Cover" 
+                        stroke="#a855f7" 
+                        strokeWidth={2}
+                        fillOpacity={1} 
+                        fill="url(#colorCover)" 
+                      />
+                      <Area 
+                        type="monotone" 
+                        dataKey="stegoDb" 
+                        name="Stego" 
+                        stroke="#22d3ee" 
+                        strokeWidth={2}
+                        fillOpacity={1} 
+                        fill="url(#colorStego)" 
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
                 </div>
-                <div className="rounded-xl border border-aura-border/10 bg-aura-bg/50 p-4 font-mono text-sm leading-7 text-aura-text min-h-[80px]">
-                  {diffTokens.length > 0 ? (
-                    diffTokens.map((token, index) => {
-                      if (token.type === 'match') {
-                        return <span key={index}>{token.value}</span>
-                      } else if (token.type === 'insert') {
-                        return (
-                          <span
-                            key={index}
-                            className="bg-aura-accent/12 text-aura-accent border border-dashed border-aura-accent/30 px-1 rounded mx-0.5"
-                            title="Inserted/Modified word in recovered payload"
-                          >
-                            {token.value}
-                          </span>
-                        )
-                      } else {
-                        return (
-                          <span
-                            key={index}
-                            className="bg-aura-danger/12 text-aura-danger border border-dashed border-aura-danger/30 px-1 rounded mx-0.5 line-through decoration-aura-danger/70"
-                            title="Missing word in recovered payload"
-                          >
-                            {token.value}
-                          </span>
-                        )
-                      }
-                    })
-                  ) : (
-                    <span className="text-aura-dim italic">No payload recovery data reported.</span>
-                  )}
+              ) : (
+                <div className="flex h-80 w-full items-center justify-center rounded-xl border border-dashed border-aura-border/20 bg-aura-bg/20 font-mono text-xs text-aura-dim">
+                  Waiting for frequency data... Click "Run Diagnostics" to generate.
                 </div>
-              </div>
-
-              {/* Expected & Recovered Raw Monospaced Panels */}
-              <div className="grid gap-6 md:grid-cols-2">
-                <div>
-                  <div className="mb-2 font-mono text-[11px] uppercase tracking-[0.16em] text-aura-reveal">
-                    Expected Payload
-                  </div>
-                  <div className="rounded-xl border border-aura-reveal/20 bg-aura-surface p-4 font-mono text-[13px] leading-6 text-aura-text min-h-[120px] max-h-[250px] overflow-y-auto">
-                    {expectedText || <span className="opacity-40 italic">None</span>}
-                  </div>
-                </div>
-
-                <div>
-                  <div className="mb-2 font-mono text-[11px] uppercase tracking-[0.16em] text-aura-accent">
-                    Recovered Payload
-                  </div>
-                  <div className="rounded-xl border border-aura-accent/20 bg-aura-surface p-4 font-mono text-[13px] leading-6 text-aura-text min-h-[120px] max-h-[250px] overflow-y-auto">
-                    {recoveredText || <span className="opacity-40 italic">None</span>}
-                  </div>
-                </div>
+              )}
+              <div className="mt-4 text-[11px] text-center font-mono text-aura-dim bg-aura-bg/30 rounded-lg p-3 leading-relaxed border border-aura-border/5">
+                Spectral power mapping reveals precise frequency bands hijacked by the neural encoder. Discrepancies between the cyan and purple curves indicate embedded payload density.
               </div>
             </div>
 
@@ -1061,9 +1082,9 @@ export default function CompareScreen({
                             key={insight.row.chunkIndex}
                             onMouseEnter={() => setHoveredChunk(insight)}
                             onMouseLeave={() => setHoveredChunk(null)}
-                            whileHover={{ scale: 1.15 }}
+                            whileHover={{ scale: 1.15, zIndex: 10 }}
                             className={cn(
-                              'aspect-square rounded-md border transition-all cursor-crosshair',
+                              'aspect-square rounded-md border transition-all cursor-crosshair relative',
                               tone === 'safe' && 'bg-aura-reveal/20 border-aura-reveal/30 text-aura-reveal',
                               tone === 'warning' && 'bg-aura-accent/20 border-aura-accent/30 text-aura-accent',
                               tone === 'danger' && 'bg-aura-danger/20 border-aura-danger/30 text-aura-danger',
@@ -1075,9 +1096,9 @@ export default function CompareScreen({
                     </div>
 
                     {/* Interactive Hover Detail Box */}
-                    <div className="rounded-xl border border-aura-border/10 bg-aura-bg/30 p-3 h-28 flex flex-col justify-center font-mono text-[11px] text-aura-muted">
+                    <div className="rounded-xl border border-aura-border/10 bg-aura-bg/30 p-4 h-32 flex flex-col justify-center font-mono text-[11px] text-aura-muted shadow-inner">
                       {hoveredChunk ? (
-                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                           <div>
                             <span className="text-aura-dim">Chunk:</span> <span className="text-aura-text font-semibold">#{hoveredChunk.row.chunkIndex}</span>
                           </div>

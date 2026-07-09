@@ -8,7 +8,21 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
+    email TEXT UNIQUE,
+    name TEXT,
+    password_hash TEXT,
+    google_id TEXT,
+    profile_picture TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_login TEXT
+);
+
+CREATE TABLE IF NOT EXISTS password_resets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -175,8 +189,43 @@ def close_db(_error=None) -> None:
 
 def init_db(seed_demo_users: bool = False) -> None:
     db = get_db()
+    
+    # Check if 'users' table exists to know if we need to migrate
+    cursor = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+    users_existed = cursor.fetchone() is not None
+
     db.executescript(SCHEMA)
     db.commit()
+
+    if users_existed:
+        # Get existing columns in 'users' table
+        cursor = db.execute("PRAGMA table_info(users)")
+        columns = {row[1] for row in cursor.fetchall()}
+        
+        # Add new columns if missing
+        new_columns = [
+            ("email", "TEXT UNIQUE"),
+            ("name", "TEXT"),
+            ("google_id", "TEXT"),
+            ("profile_picture", "TEXT"),
+            ("updated_at", "TEXT"),
+            ("last_login", "TEXT")
+        ]
+        
+        for col_name, col_def in new_columns:
+            if col_name not in columns:
+                try:
+                    # ALTER TABLE ADD COLUMN might fail on UNIQUE if database already has rows,
+                    # so we drop the UNIQUE constraint during migration adding, and create an index instead.
+                    col_def_clean = col_def.replace(" UNIQUE", "")
+                    db.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_def_clean}")
+                    if col_name == "email":
+                        # Create unique index if email was added
+                        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+                except sqlite3.OperationalError as e:
+                    import sys
+                    print(f"[migration warning] could not add column {col_name}: {e}", file=sys.stderr)
+        db.commit()
 
     if seed_demo_users:
         from services.auth_service import ensure_demo_users

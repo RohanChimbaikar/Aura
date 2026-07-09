@@ -206,7 +206,14 @@ def decode_payload_ecc(voted_nibbles, ecc_scheme):
     return bytes(payload_bytes), uncorrectable_count, corrected_bits
 
 
-def _unpack_header_bytes(header_bytes):
+def _unpack_header_bytes(
+    header_bytes,
+    checksum_corrected=False,
+    correction_byte=None,
+    correction_bit=None,
+    checksum_received=None,
+    checksum_calculated=None,
+):
     magic, version, tx_id, part_index, total_parts, payload_len, crc_payload, chunk_count, ecc_scheme, codec_hint, timestamp = struct.unpack(
         ">4sB I B B H H H B B I",
         header_bytes[:23]
@@ -223,7 +230,13 @@ def _unpack_header_bytes(header_bytes):
         "ecc_scheme": ecc_scheme,
         "codec_hint": codec_hint,
         "timestamp": timestamp,
-        "checksum_ok": True
+        "checksum_ok": True,
+        "checksum_corrected": bool(checksum_corrected),
+        "correction_byte": correction_byte,
+        "correction_bit": correction_bit,
+        "checksum_received": checksum_received,
+        "checksum_calculated": checksum_calculated,
+        "header_hex": header_bytes.hex(),
     }
 
 
@@ -244,9 +257,20 @@ def unpack_header(header_voted_nibbles):
     header_checksum_calculated = sum(header_bytes[:23]) % 256
     if header_checksum_received == header_checksum_calculated:
         try:
-            return _unpack_header_bytes(header_bytes)
-        except ValueError:
-            pass
+            return _unpack_header_bytes(
+                header_bytes,
+                checksum_received=header_checksum_received,
+                checksum_calculated=header_checksum_calculated,
+            )
+        except ValueError as e:
+            return {
+                "checksum_ok": False,
+                "checksum_corrected": False,
+                "checksum_received": header_checksum_received,
+                "checksum_calculated": header_checksum_calculated,
+                "header_hex": header_bytes.hex(),
+                "failure_reason": str(e),
+            }
             
     # 2. Try single-bit flip correction across all 24 bytes (192 bits)
     candidates = []
@@ -262,7 +286,14 @@ def unpack_header(header_voted_nibbles):
         chk_calc = sum(candidate_bytes[:23]) % 256
         if chk_rec == chk_calc:
             try:
-                info = _unpack_header_bytes(candidate_bytes)
+                info = _unpack_header_bytes(
+                    candidate_bytes,
+                    checksum_corrected=True,
+                    correction_byte=byte_idx,
+                    correction_bit=bit_pos,
+                    checksum_received=chk_rec,
+                    checksum_calculated=chk_calc,
+                )
                 candidates.append((candidate_bytes, info, byte_idx, bit_pos))
             except ValueError:
                 pass
@@ -272,7 +303,14 @@ def unpack_header(header_voted_nibbles):
         print(f"[header] Warning: corrected single-bit flip in header at byte {corr_byte}, bit {corr_bit}!")
         return info
         
-    raise ValueError(f"Header checksum mismatch: calculated {header_checksum_calculated}, received {header_checksum_received}")
+    return {
+        "checksum_ok": False,
+        "checksum_corrected": False,
+        "checksum_received": header_checksum_received,
+        "checksum_calculated": header_checksum_calculated,
+        "header_hex": header_bytes.hex(),
+        "failure_reason": f"Header checksum mismatch: calculated {header_checksum_calculated}, received {header_checksum_received}",
+    }
 
 
 def find_alignment(decoder, wav, cfg, device):
@@ -677,6 +715,67 @@ def main():
     # Unpack the header
     header_info = unpack_header(header_voted_nibbles)
 
+    if not header_info.get("checksum_ok"):
+        alignment_offset = (best_offset / cfg["sample_rate"]) - (best_shift * cfg["chunk_seconds"])
+        diagnostics = {
+            "stego_file": args.stego,
+            "total_chunks": chunks.size(0),
+            "header_chunks": header_chunks_needed,
+            "header_voted_nibbles_count": len(header_voted_nibbles),
+            "header_pred_chunk_nibbles": header_pred_chunk_nibbles,
+            "header_voted_nibbles": header_voted_nibbles,
+            "decoded_message_length": 0,
+            "payload_chunks_needed": 0,
+            "total_needed_chunks": 0,
+            "ignored_tail_chunks": 0,
+            "transmission_id": None,
+            "part_index": None,
+            "total_parts": None,
+            "ecc_scheme": None,
+            "codec_hint": None,
+            "payload_crc_expected": None,
+            "payload_crc_calculated": None,
+            "payload_crc_ok": False,
+            "uncorrectable_count": 0,
+            "corrected_bits": 0,
+            "sync_lock": f"Aligned ({alignment_offset:+.1f}s)",
+            "sync_ber": min_ber,
+            "alignment_offset_seconds": alignment_offset,
+            "alignment_offset_samples": best_offset,
+            "sync_shift_chunks": best_shift,
+            "payload_hex": "",
+            "payload_byte_length": 0,
+            "raw_text": "",
+            "corrected_text": "",
+            "changes": [],
+            "header_timestamp": None,
+            "header_chunk_count": 0,
+            "header_checksum_ok": False,
+            "header_checksum_corrected": False,
+            "header_correction_byte": None,
+            "header_correction_bit": None,
+            "header_checksum_received": header_info.get("checksum_received"),
+            "header_checksum_calculated": header_info.get("checksum_calculated"),
+            "header_hex": header_info.get("header_hex"),
+            "payload_pred_chunk_nibbles": [],
+            "payload_voted_nibbles": [],
+            "sync_pattern": [10, 10, 4, 1, 5, 5, 5, 2, 4, 1, 10, 10],
+            "repeat_factor": repeat_factor,
+            "failure_reason": header_info.get("failure_reason"),
+        }
+        print("=" * 80)
+        print("AURA V2-R RECEIVER (COVERT PACKET ARCHITECTURE)")
+        print("=" * 80)
+        print("Header checksum OK    : Fail")
+        print("Header checksum received:", header_info.get("checksum_received"))
+        print("Header checksum calculated:", header_info.get("checksum_calculated"))
+        print("Header Hex            :", header_info.get("header_hex"))
+        print("Header error          :", header_info.get("failure_reason"))
+        print("-" * 80)
+        print("AURA_DIAGNOSTICS_JSON:", json.dumps(diagnostics, sort_keys=True))
+        print("=" * 80)
+        return
+
     # Compute exact payload size
     payload_len = header_info["payload_len"]
     if header_info["ecc_scheme"] == 1:
@@ -745,11 +844,23 @@ def main():
     print("ECC Scheme            :", header_info["ecc_scheme"])
     print("Codec Hint            :", header_info["codec_hint"])
     print("Payload CRC           :", header_info["crc_payload"])
+    print("Payload CRC calculated:", calculated_crc)
     print("Payload CRC OK        :", "Pass" if crc_ok else "Fail")
     print("Uncorrectable Count   :", uncorrectable_count)
     print("Corrected Bits        :", corrected_bits)
     print("Sync Lock             :", f"Aligned ({alignment_offset:+.1f}s)")
     print("Sync BER              :", f"{min_ber:.4f}")
+    print("Alignment offset sec  :", f"{alignment_offset:.4f}")
+    print("Alignment offset samples:", best_offset)
+    print("Sync shift chunks     :", best_shift)
+    print("Header timestamp      :", header_info["timestamp"])
+    print("Header checksum OK    :", "Pass" if header_info.get("checksum_ok") else "Fail")
+    print("Header checksum corrected:", "Yes" if header_info.get("checksum_corrected") else "No")
+    print("Header correction byte:", header_info.get("correction_byte"))
+    print("Header correction bit :", header_info.get("correction_bit"))
+    print("Header checksum received:", header_info.get("checksum_received"))
+    print("Header checksum calculated:", header_info.get("checksum_calculated"))
+    print("Header Hex            :", header_info.get("header_hex"))
     print("Payload Hex           :", payload_bytes.hex())
     print("-" * 80)
 
@@ -772,6 +883,52 @@ def main():
     print("-" * 80)
     print("Header first 12 chunk nibbles :", header_pred_chunk_nibbles[:12])
     print("Payload first 24 chunk nibbles:", payload_pred_chunk_nibbles[:24])
+    diagnostics = {
+        "stego_file": args.stego,
+        "total_chunks": chunks.size(0),
+        "header_chunks": header_chunks_needed,
+        "header_voted_nibbles_count": len(header_voted_nibbles),
+        "header_pred_chunk_nibbles": header_pred_chunk_nibbles,
+        "header_voted_nibbles": header_voted_nibbles,
+        "decoded_message_length": payload_len,
+        "payload_chunks_needed": payload_chunks_needed,
+        "total_needed_chunks": total_needed_chunks,
+        "ignored_tail_chunks": extra_tail_chunks,
+        "transmission_id": header_info["tx_id"],
+        "part_index": header_info["part_index"],
+        "total_parts": header_info["total_parts"],
+        "ecc_scheme": header_info["ecc_scheme"],
+        "codec_hint": header_info["codec_hint"],
+        "payload_crc_expected": header_info["crc_payload"],
+        "payload_crc_calculated": calculated_crc,
+        "payload_crc_ok": crc_ok,
+        "uncorrectable_count": uncorrectable_count,
+        "corrected_bits": corrected_bits,
+        "sync_lock": f"Aligned ({alignment_offset:+.1f}s)",
+        "sync_ber": min_ber,
+        "alignment_offset_seconds": alignment_offset,
+        "alignment_offset_samples": best_offset,
+        "sync_shift_chunks": best_shift,
+        "payload_hex": payload_bytes.hex(),
+        "payload_byte_length": len(payload_bytes),
+        "raw_text": raw_text,
+        "corrected_text": corrected_text,
+        "changes": changes,
+        "header_timestamp": header_info["timestamp"],
+        "header_chunk_count": header_info["chunk_count"],
+        "header_checksum_ok": header_info.get("checksum_ok"),
+        "header_checksum_corrected": header_info.get("checksum_corrected"),
+        "header_correction_byte": header_info.get("correction_byte"),
+        "header_correction_bit": header_info.get("correction_bit"),
+        "header_checksum_received": header_info.get("checksum_received"),
+        "header_checksum_calculated": header_info.get("checksum_calculated"),
+        "header_hex": header_info.get("header_hex"),
+        "payload_pred_chunk_nibbles": payload_pred_chunk_nibbles,
+        "payload_voted_nibbles": payload_voted_nibbles,
+        "sync_pattern": [10, 10, 4, 1, 5, 5, 5, 2, 4, 1, 10, 10],
+        "repeat_factor": repeat_factor,
+    }
+    print("AURA_DIAGNOSTICS_JSON:", json.dumps(diagnostics, sort_keys=True))
     print("=" * 80)
 
 

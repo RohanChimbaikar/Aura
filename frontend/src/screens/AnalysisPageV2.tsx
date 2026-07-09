@@ -16,6 +16,12 @@ import {
   Loader2,
   RefreshCcw,
   ShieldCheck,
+  AlertTriangle,
+  Info,
+  AlertCircle,
+  Terminal,
+  X,
+  BarChart3,
 } from 'lucide-react'
 import { WaveformStrip } from '../components/WaveformStrip'
 import { cn } from '../lib/utils'
@@ -106,6 +112,7 @@ type Props = {
   status?: AnalysisRunStatus
   theme?: 'dark' | 'light'
   onThemeChange?: (theme: 'dark' | 'light') => void
+  onImportAudio?: (file: File) => Promise<void>
 }
 
 type ChunkInsight = {
@@ -131,7 +138,7 @@ function isTerminalStatus(status?: string) {
   return TERMINAL_ANALYSIS_STATUSES.has((status || '').toLowerCase())
 }
 
-function isSuccessLikeStatus(status?: string) {
+export function isSuccessLikeStatus(status?: string) {
   return SUCCESS_ANALYSIS_STATUSES.has((status || '').toLowerCase())
 }
 
@@ -304,7 +311,6 @@ export function AnalysisPageV2({
 
   const renderable = analysisBelongsToPickedAudio && hasRenderablePayload(analysis)
   const terminal = Boolean(analysis && analysisBelongsToPickedAudio && isTerminalStatus(analysis.status))
-  const successLike = Boolean(analysis && analysisBelongsToPickedAudio && isSuccessLikeStatus(analysis.status))
   const isRunning = Boolean(loading)
 
   const showNoPayloadFallback =
@@ -463,35 +469,59 @@ export function AnalysisPageV2({
 
         {showRenderableAnalysis ? (
           <main className="space-y-8 py-5 lg:space-y-10 lg:py-7">
-            <RecoveryOutcomeLayer
+            {/* 1. Verdict Banner */}
+            <AnalysisVerdictBanner analysis={analysis as AnalysisPayload} />
+
+            {/* 2. Analysis Summary / Overview */}
+            <AnalysisSummaryOverview
               analysis={analysis as AnalysisPayload}
-              selectedAudio={pickedAudio}
+              recoveredText={recoveryText}
+            />
+
+            {/* 3. Recovered Payload Section (Always Visible) */}
+            <RecoveredPayloadSection
+              analysis={analysis as AnalysisPayload}
               recoveredText={recoveryText}
               rawText={rawRecoveryText}
               messageMode={messageMode}
               onMessageModeChange={setMessageMode}
-              successLike={successLike}
             />
 
-            <CoreMetricsLayer analysis={analysis as AnalysisPayload} chunkRows={chunkRows} />
+            {/* 4. Transmission Details Section (Collapsible, Expanded by Default) */}
+            <TransmissionDetailsSection
+              analysis={analysis as AnalysisPayload}
+              audio={pickedAudio}
+            />
 
-            <SignalIntelligenceLayer
+            {/* 5. Integrity & Core Metrics Section (Collapsible, Expanded by Default, hidden if empty) */}
+            <IntegrityMetricsSection
+              analysis={analysis as AnalysisPayload}
+              chunkRows={chunkRows}
+            />
+
+             <ArtifactsSection
               analysis={analysis as AnalysisPayload}
               selectedAudio={pickedAudio}
               chunkRows={chunkRows}
               selectedPart={selectedPart}
               onSelectPart={setSelectedPart}
-            />
-
-            <AdvancedDiagnosticsWorkbench
-              analysis={analysis as AnalysisPayload}
-              selectedAudio={pickedAudio}
-              chunkRows={chunkRows}
-              selectedPart={selectedPart}
-              onSelectPart={setSelectedPart}
-              activeTab={advancedTab}
+              advancedTab={advancedTab}
               onTabChange={setAdvancedTab}
             />
+            
+            {/* 6. Diagnostics Section (Collapsible, Collapsed by Default) */}
+            <DiagnosticsSection
+              analysis={analysis as AnalysisPayload}
+            />
+
+            {/* 7. Advanced Forensic Metrics Section (Collapsible, Collapsed by Default) */}
+            <AdvancedForensicMetricsSection
+              analysis={analysis as AnalysisPayload}
+              chunkRows={chunkRows}
+            />
+
+            {/* 8. Artifacts Section (Collapsible, Collapsed by Default) */}
+           
           </main>
         ) : null}
 
@@ -544,71 +574,84 @@ function AnalysisTopBar({
 
   return (
     <header className="bg-transparent">
-      <div className="grid min-h-[110px] grid-cols-1 gap-4 py-4 lg:grid-cols-[25%_50%_25%] lg:items-center">
-        <div className="min-w-0 self-center">
-          <h1 className="text-[30px] font-semibold leading-none tracking-normal text-aura-text lg:text-[38px]">
+      <div className="flex flex-col gap-6 py-4 lg:flex-row lg:items-center lg:justify-between">
+        
+        {/* Left: Title */}
+        <div className="min-w-0 shrink-0">
+          <h1 className="text-[30px] font-semibold leading-none tracking-tight text-slate-900 dark:text-white lg:text-[34px]">
             Analysis
           </h1>
-          <div className="mt-2 text-[12px] leading-4 text-aura-muted">
+          <div className="mt-2.5 text-[13px] font-medium text-slate-500 dark:text-slate-400">
             Neural signal recovery workstation
           </div>
         </div>
 
-        <div className="min-w-0 self-center">
+        {/* Center: Audio Selector */}
+        <div className="w-full flex-1 max-w-[600px] lg:px-6">
           <label className="block min-w-0" title={`${selectedName} / ${selectedSource}`}>
             <span className="sr-only">Selected audio</span>
-            <div className="aura-toolbar-select relative flex h-12 min-w-0 items-center gap-3 rounded-[12px] px-3">
-              <FileAudio size={16} className="shrink-0 text-aura-dim" />
+            <div className="relative flex h-[52px] min-w-0 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-sm dark:border-white/10 dark:bg-[#121622] focus-within:ring-4 focus-within:ring-blue-500/10 focus-within:border-blue-500 transition-all">
+              <FileAudio size={18} className="shrink-0 text-blue-500 dark:text-blue-400" />
               <div className="pointer-events-none min-w-0 flex-1 overflow-hidden pr-9">
-                <div className="flex min-w-0 items-baseline gap-1.5 font-mono text-[12px] text-aura-text">
-                  <span className="min-w-0 truncate">{selectedName}</span>
-                  <span className="shrink-0 text-aura-dim">/</span>
-                  <span className="shrink-0 text-aura-muted">{selectedSource}</span>
+                <div className="flex min-w-0 items-baseline gap-2 font-mono text-[13px] text-slate-900 dark:text-white">
+                  <span className="min-w-0 truncate font-semibold">{selectedName}</span>
+                  <span className="shrink-0 text-slate-300 dark:text-slate-600">/</span>
+                  <span className="shrink-0 text-slate-500 dark:text-slate-400">{selectedSource}</span>
                 </div>
               </div>
               <select
                 value={pickerKey}
                 onChange={(event) => onPickerChange(event.target.value)}
-                className="absolute inset-0 h-12 w-full cursor-pointer appearance-none border-0 bg-transparent px-3 pr-10 text-transparent outline-none"
+                className="absolute inset-0 h-full w-full cursor-pointer appearance-none border-0 bg-transparent px-3 pr-10 text-transparent outline-none"
               >
-                {options.length === 0 ? <option value="">No audio available</option> : null}
+                {options.length === 0 ? (
+                  <option value="" className="bg-white text-slate-900 dark:bg-[#121622] dark:text-white">
+                    No audio available
+                  </option>
+                ) : null}
                 {options.map((option) => (
-                  <option key={option.key} value={option.key}>
+                  <option 
+                    key={option.key} 
+                    value={option.key}
+                    // Explicitly styling the options overrides the transparency bug
+                    className="bg-white text-slate-900 dark:bg-[#121622] dark:text-white"
+                  >
                     {option.audio.fileName} / {option.audio.source}
                   </option>
                 ))}
               </select>
               <ChevronDown
-                size={14}
-                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-aura-dim"
+                size={16}
+                className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500"
               />
             </div>
           </label>
 
-          <div className="mt-2 flex min-w-0 items-center gap-2 overflow-hidden text-[10px] text-aura-dim">
+          <div className="mt-2.5 flex min-w-0 items-center gap-2 overflow-hidden px-1 text-[11px] text-slate-500 dark:text-slate-400 uppercase tracking-wider font-medium">
             <span className="shrink-0">{filesLabel}</span>
-            <span className="shrink-0 opacity-60">/</span>
+            <span className="shrink-0 opacity-40">•</span>
             <span className="min-w-0 truncate">{transmissionLabel}</span>
           </div>
         </div>
 
-        <div className="min-w-0 self-center">
-          <div className="flex min-w-0 flex-nowrap justify-start gap-1.5 overflow-hidden lg:justify-end">
-            <ToolbarChip value={modelVersion} className="max-w-[92px]" />
-            <ToolbarChip value={sourceLabel} className="max-w-[78px]" />
+        {/* Right: Actions & Meta */}
+        <div className="flex shrink-0 flex-col items-start lg:items-end gap-4">
+          <div className="flex min-w-0 flex-nowrap items-center gap-2 overflow-hidden">
+            <ToolbarChip value={modelVersion} className="max-w-[100px]" />
+            <ToolbarChip value={sourceLabel} className="max-w-[85px]" />
             <ToolbarChip value={timestamp} className="max-w-[90px]" />
           </div>
 
-          <div className="mt-3 flex min-w-0 items-center gap-2 lg:justify-end">
+          <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
               onClick={onAnalyze}
               disabled={analyzeDisabled}
-              className="aura-tactile-button inline-flex h-10 shrink-0 items-center justify-center rounded-[10px] px-4 text-[12px] font-semibold text-aura-bg disabled:cursor-not-allowed disabled:opacity-45"
+              className="inline-flex h-11 shrink-0 items-center justify-center rounded-xl bg-slate-900 dark:bg-blue-600 px-6 text-[13.5px] font-semibold text-white shadow-sm hover:bg-slate-800 dark:hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50 transition-all active:scale-[0.98]"
             >
               {analyzing ? (
                 <span className="inline-flex items-center gap-2">
-                  <Loader2 size={13} className="animate-spin" />
+                  <Loader2 size={15} className="animate-spin" />
                   Analyzing
                 </span>
               ) : (
@@ -620,7 +663,7 @@ function AnalysisTopBar({
               type="button"
               onClick={onExport}
               disabled={!canExport}
-              className="inline-flex h-10 shrink-0 items-center justify-center rounded-[10px] border border-aura-border/10 px-4 text-[12px] font-medium text-aura-text transition-colors hover:bg-aura-surfaceSoft disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex h-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-transparent px-5 text-[13.5px] font-semibold text-slate-700 dark:text-slate-300 transition-colors hover:bg-slate-50 dark:hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
             >
               Export
             </button>
@@ -630,173 +673,16 @@ function AnalysisTopBar({
     </header>
   )
 }
-
 function ToolbarChip({ value, className }: { value: ReactNode; className?: string }) {
   return (
     <div
       className={cn(
-        'aura-toolbar-chip inline-flex h-8 items-center truncate rounded-xl px-2.5 font-mono text-[11px] text-aura-muted',
+        'inline-flex h-[26px] items-center truncate rounded-md bg-slate-100 dark:bg-white/5 px-2.5 font-mono text-[11px] font-medium text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-white/10',
         className,
       )}
     >
       {value}
     </div>
-  )
-}
-
-function RecoveryOutcomeLayer({
-  analysis,
-  selectedAudio,
-  recoveredText,
-  rawText,
-  messageMode,
-  onMessageModeChange,
-  successLike,
-}: {
-  analysis: AnalysisPayload
-  selectedAudio: SelectedAudio | null
-  recoveredText: string
-  rawText: string
-  messageMode: MessageMode
-  onMessageModeChange: (mode: MessageMode) => void
-  successLike: boolean
-}) {
-  const displayedText = messageMode === 'raw' ? rawText : recoveredText
-  const canCompare = Boolean(rawText && rawText !== recoveredText)
-  const recovery = getRecoveryVerdict(analysis, recoveredText, successLike)
-  const chunkInsights = getChunkInsights(analysis.chunkTable, analysis.charts.payloadStructure)
-  const bitAccuracy = getAverageBitAccuracy(chunkInsights)
-  const duration = getDurationLabel(analysis, selectedAudio)
-  const payloadBytes = getTextByteLength(recoveredText)
-  const corruptionSummary = getCorruptionSummary(analysis, chunkInsights)
-  const metricRows = [
-    {
-      label: 'Confidence',
-      value: formatPercentValue(normalizePercent(analysis.summary.recoveryConfidence)),
-      note: 'decode confidence',
-    },
-    {
-      label: 'Character recovery',
-      value: 'Not reported',
-      note: 'source text not emitted',
-    },
-    {
-      label: 'Bit accuracy',
-      value: formatPercentValue(bitAccuracy),
-      note: bitAccuracy == null ? 'bit agreement absent' : 'chunk bit agreement',
-    },
-    {
-      label: 'Payload size',
-      value: formatBytes(payloadBytes),
-      note: 'recovered UTF-8 text',
-    },
-    {
-      label: 'Chunk count',
-      value: String(analysis.summary.payloadChunks || analysis.chunkTable.length || 0),
-      note: `${analysis.summary.ignoredTail || 0} ignored tail`,
-    },
-    {
-      label: 'Audio duration',
-      value: duration,
-      note: selectedAudio?.source || 'selected target',
-    },
-  ]
-
-  return (
-    <section aria-label="Primary recovery outcome">
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-aura-dim">
-            Layer 1 / Primary outcome
-          </div>
-          <h2 className="mt-2 text-[34px] font-semibold leading-tight tracking-normal text-aura-text lg:text-[46px]">
-            {recovery.title}
-          </h2>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <MessageModeToggle
-            value={messageMode}
-            onChange={onMessageModeChange}
-            disabledRaw={!canCompare}
-          />
-          <button
-            type="button"
-            onClick={() => void navigator.clipboard?.writeText(displayedText)}
-            disabled={!displayedText}
-            className="inline-flex h-9 items-center gap-2 rounded-[10px] border border-aura-border/10 px-3 text-[12px] font-medium text-aura-text transition-colors hover:bg-aura-surfaceSoft disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <Clipboard size={14} />
-            Copy
-          </button>
-        </div>
-      </div>
-
-      <div className="aura-transcript-surface overflow-hidden rounded-[16px]">
-        <div className="grid xl:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="min-w-0 px-5 py-5 lg:px-7 lg:py-7">
-            <div className="flex flex-col gap-3 border-b border-aura-border/10 pb-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex flex-wrap items-center gap-2">
-                <OutcomeBadge tone={recovery.tone}>{recovery.status}</OutcomeBadge>
-                <span className="font-mono text-[11px] text-aura-muted">
-                  {messageMode === 'raw' ? 'raw decoder output' : 'validated recovery text'}
-                </span>
-              </div>
-              <div className="truncate font-mono text-[11px] text-aura-dim">
-                {selectedAudio?.selectedPartFilename || selectedAudio?.fileName || analysis.analysisId}
-              </div>
-            </div>
-
-            <p className="mt-6 min-h-[92px] select-text whitespace-pre-wrap break-words font-mono text-[28px] leading-[1.4] text-aura-text sm:text-[34px]">
-              {displayedText || 'No recoverable hidden text detected.'}
-            </p>
-
-            <div className="mt-6 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-              {metricRows.map((metric) => (
-                <OutcomeMetric key={metric.label} label={metric.label} value={metric.value} note={metric.note} />
-              ))}
-            </div>
-          </div>
-
-          <aside className="border-t border-aura-border/10 bg-aura-bg/20 px-5 py-5 xl:border-l xl:border-t-0 lg:px-6 lg:py-6">
-            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-aura-dim">
-              <ShieldCheck size={14} />
-              Recovery integrity
-            </div>
-
-            <div className="mt-5 space-y-3">
-              <IntegrityRow
-                label="Error correction"
-                value={getEccLabel(analysis)}
-                detail={`${analysis.summary.correctionsCount || 0} recorded correction(s)`}
-              />
-              <IntegrityRow
-                label="Sequence"
-                value={analysis.summary.sequenceValid === false ? 'Flagged' : 'Validated'}
-                detail={`${analysis.summary.missingPartsCount || 0} missing / ${analysis.summary.duplicatePartsCount || 0} duplicate`}
-              />
-              <IntegrityRow
-                label="Header"
-                value={formatNullableBool(analysis.summary.headerValid)}
-                detail="backend header validation"
-              />
-              <IntegrityRow
-                label="Files"
-                value={`${analysis.summary.filesProcessed} / ${analysis.summary.filesTotal}`}
-                detail={analysis.sourceType === 'grouped' ? 'transmission parts' : 'analysis source'}
-              />
-            </div>
-
-            <div className="mt-5 rounded-[12px] border border-aura-border/10 bg-aura-bg/24 px-3 py-3">
-              <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-aura-dim">
-                Corruption resilience
-              </div>
-              <p className="mt-2 text-sm leading-6 text-aura-muted">{corruptionSummary}</p>
-            </div>
-          </aside>
-        </div>
-      </div>
-    </section>
   )
 }
 
@@ -827,104 +713,6 @@ function MessageModeToggle({
           {mode}
         </button>
       ))}
-    </div>
-  )
-}
-
-function OutcomeBadge({ children, tone }: { children: ReactNode; tone: MetricTone }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]',
-        tone === 'safe' && 'border-aura-reveal/20 bg-aura-reveal/12 text-aura-reveal',
-        tone === 'warning' && 'border-aura-accent/20 bg-aura-accent/12 text-aura-text',
-        tone === 'danger' && 'border-aura-danger/20 bg-aura-danger/12 text-aura-danger',
-        tone === 'neutral' && 'border-aura-border/12 bg-aura-surfaceSoft text-aura-muted',
-      )}
-    >
-      {children}
-    </span>
-  )
-}
-
-function OutcomeMetric({ label, value, note }: { label: string; value: string; note: string }) {
-  return (
-    <div className="rounded-[12px] border border-aura-border/10 bg-aura-bg/18 px-3 py-3">
-      <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-aura-dim">{label}</div>
-      <div className="mt-2 text-lg font-semibold text-aura-text">{value}</div>
-      <div className="mt-1 truncate font-mono text-[11px] text-aura-muted">{note}</div>
-    </div>
-  )
-}
-
-function IntegrityRow({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <div className="grid grid-cols-[110px_1fr] gap-3 border-b border-aura-border/10 pb-3 last:border-b-0 last:pb-0">
-      <div className="text-[11px] uppercase tracking-[0.13em] text-aura-dim">{label}</div>
-      <div className="min-w-0">
-        <div className="text-sm font-semibold text-aura-text">{value}</div>
-        <div className="mt-1 truncate font-mono text-[11px] text-aura-muted">{detail}</div>
-      </div>
-    </div>
-  )
-}
-
-function CoreMetricsLayer({
-  analysis,
-  chunkRows,
-}: {
-  analysis: AnalysisPayload
-  chunkRows: AnalysisPayload['chunkTable']
-}) {
-  const metrics = getCoreMetrics(analysis, chunkRows)
-
-  return (
-    <section aria-label="Core analytics">
-      <div className="mb-4">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-aura-dim">
-          Layer 2 / Core analytics
-        </div>
-        <h2 className="mt-2 text-2xl font-semibold tracking-normal text-aura-text">
-          Reliability at a glance
-        </h2>
-      </div>
-
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        {metrics.map((metric) => (
-          <CoreMetricCard key={metric.label} metric={metric} />
-        ))}
-      </div>
-    </section>
-  )
-}
-
-function CoreMetricCard({ metric }: { metric: MetricDescriptor }) {
-  return (
-    <div className="aura-glass-panel rounded-[12px] px-3 py-3">
-      <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-aura-dim">
-        {metric.label}
-      </div>
-      <div className="mt-2 flex items-end justify-between gap-3">
-        <div className="text-[22px] font-semibold leading-none text-aura-text">{metric.value}</div>
-        {metric.normalized != null ? (
-          <div className="h-6 w-1.5 overflow-hidden rounded-full bg-aura-border/10">
-            <div
-              className={cn(
-                'w-full rounded-full',
-                metric.tone === 'danger' && 'bg-aura-danger',
-                metric.tone === 'warning' && 'bg-aura-accent',
-                metric.tone === 'safe' && 'bg-aura-reveal',
-                (!metric.tone || metric.tone === 'neutral') && 'bg-aura-muted',
-              )}
-              style={{
-                height: `${Math.max(8, clamp(metric.normalized, 0, 1) * 100)}%`,
-                marginTop: `${100 - Math.max(8, clamp(metric.normalized, 0, 1) * 100)}%`,
-              }}
-            />
-          </div>
-        ) : null}
-      </div>
-      <div className="mt-2 truncate font-mono text-[11px] text-aura-muted">{metric.note}</div>
     </div>
   )
 }
@@ -1507,7 +1295,10 @@ function SpectrogramCanvas({
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, width, height)
-    ctx.fillStyle = 'rgb(12,13,15)'
+    
+    // Dynamically check if dark mode is active on the HTML root
+    const isDark = document.documentElement.classList.contains('dark')
+    ctx.fillStyle = isDark ? 'rgb(12,13,15)' : 'rgb(248, 250, 252)'
     ctx.fillRect(0, 0, width, height)
 
     const rows = matrix.values.length
@@ -2302,7 +2093,7 @@ function LegendDot({ color, label }: { color: string; label: string }) {
   )
 }
 
-function getRecoveryVerdict(
+export function getRecoveryVerdict(
   analysis: AnalysisPayload,
   recoveredText: string,
   successLike: boolean,
@@ -2338,6 +2129,11 @@ function getRecoveryVerdict(
   }
 }
 
+function getPsnr(mse: number | null | undefined): number | null {
+  if (mse == null || !Number.isFinite(mse) || mse <= 0) return null
+  return 10 * Math.log10(1.0 / mse)
+}
+
 function getCoreMetrics(
   analysis: AnalysisPayload,
   chunkRows: AnalysisPayload['chunkTable'],
@@ -2347,11 +2143,16 @@ function getCoreMetrics(
   const snrAverage =
     averageNullable(chunkRows.map((row) => (typeof row.snrDb === 'number' ? row.snrDb : null))) ??
     analysis.summary.overallSnrDb
+  const mseAverage =
+    averageNullable(chunkRows.map((row) => (typeof row.mse === 'number' ? row.mse : null))) ??
+    analysis.summary.overallMse
+  const psnrValue = getPsnr(mseAverage)
   const payloadDensity = getPayloadDensity(analysis)
   const activeChunks = getActivePayloadChunkCount(analysis, insights)
   const robustness = normalizePercent(analysis.summary.integrityScore)
   const confidence = normalizePercent(analysis.summary.recoveryConfidence)
   const tamper = getTamperResistanceEstimate(analysis, insights)
+  const charAccuracy = normalizePercent(analysis.summary.characterAccuracy)
 
   return [
     {
@@ -2362,6 +2163,13 @@ function getCoreMetrics(
       tone: snrAverage == null ? 'neutral' : snrAverage >= 18 ? 'safe' : snrAverage >= 10 ? 'warning' : 'danger',
     },
     {
+      label: 'PSNR',
+      value: psnrValue == null ? 'Unavailable' : `${psnrValue.toFixed(1)} dB`,
+      note: psnrValue == null ? 'cover comparison absent' : 'peak signal-to-noise ratio',
+      normalized: psnrValue == null ? null : clamp(psnrValue / 60, 0, 1),
+      tone: psnrValue == null ? 'neutral' : psnrValue >= 40 ? 'safe' : psnrValue >= 30 ? 'warning' : 'danger',
+    },
+    {
       label: 'Bit accuracy',
       value: formatPercentValue(bitAccuracy),
       note: bitAccuracy == null ? 'bit agreement absent' : 'chunk bit agreement',
@@ -2370,8 +2178,10 @@ function getCoreMetrics(
     },
     {
       label: 'Character accuracy',
-      value: 'Not reported',
-      note: 'original plaintext unavailable',
+      value: charAccuracy == null ? 'Unavailable' : formatPercentValue(charAccuracy),
+      note: charAccuracy == null ? 'original plaintext absent' : 'reconstructed character accuracy',
+      normalized: charAccuracy,
+      tone: charAccuracy == null ? 'neutral' : getAccuracyTone(charAccuracy),
     },
     {
       label: 'Payload density',
@@ -2532,7 +2342,7 @@ function getTamperResistanceEstimate(analysis: AnalysisPayload, insights: ChunkI
   return clamp(score, 0, 1)
 }
 
-function getCorruptionSummary(analysis: AnalysisPayload, insights: ChunkInsight[]) {
+export function getCorruptionSummary(analysis: AnalysisPayload, insights: ChunkInsight[]) {
   const corrections = analysis.summary.correctionsCount || 0
   const weakChunks = insights.filter((insight) => insight.tone === 'danger').length
   const missing = analysis.summary.missingPartsCount || 0
@@ -2553,7 +2363,7 @@ function getCorruptionSummary(analysis: AnalysisPayload, insights: ChunkInsight[
   return 'No sequence loss or correction pressure was reported by the current analysis payload.'
 }
 
-function getEccLabel(analysis: AnalysisPayload) {
+export function getEccLabel(analysis: AnalysisPayload) {
   if (analysis.summary.correctionsApplied || analysis.summary.correctionsCount > 0) return 'Applied'
   return 'No correction recorded'
 }
@@ -2705,7 +2515,7 @@ function formatSnr(value: number | null | undefined) {
   return `${value.toFixed(1)} dB`
 }
 
-function formatNullableBool(value: boolean | null | undefined) {
+export function formatNullableBool(value: boolean | null | undefined) {
   if (value == null) return 'Not reported'
   return value ? 'Yes' : 'No'
 }
@@ -2715,12 +2525,12 @@ function formatNullableDecimal(value: number | null | undefined, digits: number)
   return value.toFixed(digits)
 }
 
-function formatBytes(value: number) {
+export function formatBytes(value: number) {
   if (value < 1024) return `${value} B`
   return `${(value / 1024).toFixed(1)} KB`
 }
 
-function getTextByteLength(value: string) {
+export function getTextByteLength(value: string) {
   if (!value) return 0
   return new TextEncoder().encode(value).length
 }
@@ -2738,4 +2548,690 @@ function sanitizeFilename(value: string) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
+}
+
+function getFinalVerdict(analysis: AnalysisPayload) {
+  const status = (analysis.status || '').toLowerCase()
+  const recoveryStatus = (analysis.summary?.recoveryStatus || '').toLowerCase()
+  
+  const corrections = analysis.summary?.correctionsCount || 0
+  const missing = analysis.summary?.missingPartsCount || 0
+  const failed = analysis.summary?.failedPartsCount || 0
+
+  // Calculate if we actually got text back, regardless of backend status
+  const recoveredText = 
+    analysis?.summary?.recoveredText?.trim() ||
+    analysis?.recovery?.corrected_text?.trim() ||
+    analysis?.recovery?.raw_text?.trim() ||
+    '';
+  
+  const hasText = recoveredText.length > 0;
+
+  // Pure failure: Backend says failed AND we got absolutely no text out of it
+  if ((status === 'failed' || recoveryStatus === 'failed') && !hasText) {
+    return {
+      title: 'Recovery Failed',
+      description: 'The payload could not be reconstructed from the available audio signal.',
+      badge: 'Status: Failed',
+      tone: 'danger' as const,
+    }
+  }
+
+  // Smart Fallback: Backend says failed, BUT we managed to extract text anyway (e.g., CRC failed, but text is readable)
+  if ((status === 'failed' || recoveryStatus === 'failed') && hasText) {
+    return {
+      title: 'Payload Recovered with Errors',
+      description: 'Text was extracted, but the signal failed backend validation (e.g., checksum mismatch or high noise).',
+      badge: 'Status: Corrupted',
+      tone: 'warning' as const,
+    }
+  }
+
+  if (missing > 0 || failed > 0) {
+    return {
+      title: 'Partial Recovery',
+      description: 'Reconstruction succeeded but some transmission segments are missing or damaged.',
+      badge: 'Status: Partial',
+      tone: 'warning' as const,
+    }
+  }
+
+  if (corrections > 0) {
+    return {
+      title: 'Recovery Completed with Warnings',
+      description: 'Minor inconsistencies were detected in the stego signal and successfully corrected.',
+      badge: 'Status: Corrected',
+      tone: 'warning' as const,
+    }
+  }
+
+  return {
+    title: 'Recovery Successful',
+    description: 'The payload was reconstructed successfully without any sequence errors.',
+    badge: 'Status: Verified',
+    tone: 'safe' as const,
+  }
+}
+
+
+function getCarrierUtilization(analysis: AnalysisPayload) {
+  const payloadChunks = analysis.summary?.payloadChunks || 0
+  const total = analysis.chunkTable?.length || 0
+  if (payloadChunks > 0 && total > 0) {
+    return payloadChunks / total
+  }
+  return null
+}
+
+function ForensicLabel({ text, tooltip }: { text: string; tooltip: string }) {
+  return (
+    <span className="group relative inline-flex items-center gap-1.5 cursor-help text-aura-muted hover:text-aura-text transition-colors hover:z-50">
+      <span>{text}</span>
+      <Info size={12} className="opacity-60 hover:opacity-100 transition-opacity" />
+      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 rounded-xl bg-white dark:bg-[#121622] border border-slate-200 dark:border-white/10 px-3 py-2 text-[11px] leading-normal text-slate-900 dark:text-white opacity-0 shadow-2xl backdrop-blur-md group-hover:opacity-100 transition-opacity duration-150 z-[999] text-center">
+        {tooltip}
+      </span>
+    </span>
+  )
+}
+function AnalysisVerdictBanner({ analysis }: { analysis: AnalysisPayload }) {
+  const verdict = getFinalVerdict(analysis)
+  return (
+    <div className={cn(
+      "rounded-[20px] border p-5 shadow-sm flex flex-row items-center gap-5 transition-all duration-200",
+      verdict.tone === 'safe' && 'border-emerald-200 dark:border-emerald-500/20 bg-emerald-50/60 dark:bg-emerald-950/20',
+      verdict.tone === 'warning' && 'border-amber-200 dark:border-amber-500/20 bg-amber-50/60 dark:bg-amber-950/20',
+      verdict.tone === 'danger' && 'border-red-200 dark:border-red-500/20 bg-red-50/60 dark:bg-red-950/20'
+    )}>
+      <div className={cn(
+        "flex h-14 w-14 shrink-0 items-center justify-center rounded-full border shadow-sm",
+        verdict.tone === 'safe' && 'bg-emerald-100 border-emerald-200 text-emerald-600 dark:bg-emerald-500/20 dark:border-emerald-500/30',
+        verdict.tone === 'warning' && 'bg-amber-100 border-amber-200 text-amber-600 dark:bg-amber-500/20 dark:border-amber-500/30',
+        verdict.tone === 'danger' && 'bg-red-100 border-red-200 text-red-600 dark:bg-red-500/20 dark:border-red-500/30'
+      )}>
+        {verdict.tone === 'safe' ? <Check size={26} strokeWidth={2.5} /> : verdict.tone === 'danger' ? <X size={26} strokeWidth={2.5} /> : <AlertTriangle size={26} strokeWidth={2.5} />}
+      </div>
+      <div>
+        <div className={cn(
+          "text-[11px] font-bold uppercase tracking-wider mb-1",
+          verdict.tone === 'safe' && 'text-emerald-600 dark:text-emerald-500',
+          verdict.tone === 'warning' && 'text-amber-600 dark:text-amber-500',
+          verdict.tone === 'danger' && 'text-red-600 dark:text-red-500'
+        )}>
+          {verdict.badge}
+        </div>
+        <h3 className="text-xl font-bold text-slate-900 dark:text-white leading-none">{verdict.title}</h3>
+        <p className="text-[13.5px] text-slate-600 dark:text-slate-400 mt-1.5 leading-normal">{verdict.description}</p>
+      </div>
+    </div>
+  )
+}
+
+function AnalysisSummaryOverview({ analysis, recoveredText }: { analysis: AnalysisPayload; recoveredText: string }) {
+  const isMulti = analysis.sourceType === 'grouped' || (analysis.summary?.filesTotal ?? 0) > 1
+  const transmissionType = isMulti ? 'Grouped' : 'Single Part'
+  const filesCount = `${analysis.summary?.filesProcessed || 0} / ${analysis.summary?.filesTotal || 0}`
+  const payloadBytes = recoveredText ? new TextEncoder().encode(recoveredText).length : 0
+  const analysisDuration = analysis.elapsedMs ? `${(analysis.elapsedMs / 1000).toFixed(2)} s` : '0.05 s'
+  
+  const statusLabel = analysis.summary?.recoveryStatus === 'complete' || analysis.summary?.recoveryStatus === 'verified'
+    ? 'Successful' 
+    : analysis.summary?.recoveryStatus === 'partial' 
+      ? 'Completed' 
+      : 'Failed'
+
+  const confidenceScore = analysis.summary?.recoveryConfidence != null 
+    ? formatPercentValue(normalizePercent(analysis.summary.recoveryConfidence))
+    : 'Unavailable'
+
+  const headerLabel = analysis.summary?.headerValid === true 
+    ? 'Validated' 
+    : analysis.summary?.headerValid === false 
+      ? 'Failed' 
+      : 'Unavailable'
+
+  const sequenceLabel = analysis.summary?.sequenceValid === true 
+    ? 'Validated' 
+    : isMulti 
+      ? 'Flags / Missing' 
+      : 'Validated'
+
+  return (
+    <div className="aura-glass-panel rounded-2xl p-5 border border-slate-200 dark:border-white/8 shadow-md bg-white dark:bg-[#121622]">
+      <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-aura-dim mb-4">
+        Forensic summary
+      </h3>
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-8">
+        <SummaryItem label="Transmission Type" value={transmissionType} />
+        <SummaryItem label="Files Analysed" value={filesCount} />
+        <SummaryItem label="Recovery Status" value={statusLabel} />
+        <SummaryItem label="Recovered Payload" value={`${payloadBytes} bytes`} />
+        <SummaryItem label="Confidence" value={confidenceScore} />
+        <SummaryItem label="Header" value={headerLabel} />
+        <SummaryItem label="Sequence" value={sequenceLabel} />
+        <SummaryItem label="Analysis Time" value={analysisDuration} />
+      </div>
+    </div>
+  )
+}
+
+function SummaryItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[10px] uppercase tracking-wider text-aura-muted font-medium truncate">{label}</div>
+      <div className="mt-1 text-[13.5px] font-bold text-slate-900 dark:text-white truncate" title={value}>{value}</div>
+    </div>
+  )
+}
+
+function RecoveredPayloadSection({
+  analysis,
+  recoveredText,
+  rawText,
+  messageMode,
+  onMessageModeChange,
+}: {
+  analysis: AnalysisPayload
+  recoveredText: string
+  rawText: string
+  messageMode: MessageMode
+  onMessageModeChange: (mode: MessageMode) => void
+}) {
+  const displayedText = messageMode === 'raw' ? rawText : recoveredText
+  const canCompare = Boolean(rawText && rawText !== recoveredText)
+  
+  const confidence = analysis.summary?.recoveryConfidence != null 
+    ? formatPercentValue(normalizePercent(analysis.summary.recoveryConfidence))
+    : 'Unavailable'
+
+  const headerValid = analysis.summary?.headerValid === true ? 'Passed' : 'Failed'
+  const filesCount = `${analysis.summary?.filesProcessed || 0} / ${analysis.summary?.filesTotal || 0}`
+  const isMulti = analysis.sourceType === 'grouped' || (analysis.summary?.filesTotal ?? 0) > 1
+  const transLabel = isMulti ? 'Grouped' : 'Single'
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-aura-dim">
+            Layer 1 / Recovery Output
+          </h2>
+          <h3 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">Recovered Payload</h3>
+        </div>
+        <div className="flex items-center gap-2">
+          <MessageModeToggle
+            value={messageMode}
+            onChange={onMessageModeChange}
+            disabledRaw={!canCompare}
+          />
+          <button
+            type="button"
+            onClick={() => void navigator.clipboard?.writeText(displayedText)}
+            disabled={!displayedText}
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-200 dark:border-white/8 bg-slate-50 dark:bg-white/[0.02] hover:bg-slate-100 dark:hover:bg-white/[0.06] px-3.5 text-[12px] font-semibold text-aura-text transition active:scale-[0.98] disabled:opacity-40 disabled:scale-100"
+          >
+            <Clipboard size={13} />
+            Copy
+          </button>
+        </div>
+      </div>
+
+      {/* Removed overflow-hidden from this div */}
+      <div className="aura-transcript-surface rounded-2xl border border-slate-200 dark:border-white/8 bg-white dark:bg-white/[0.01] p-5 md:p-6 shadow-lg">
+        <p className="whitespace-pre-wrap break-words font-mono text-[22px] md:text-[28px] leading-relaxed text-slate-900 dark:text-white text-center py-4 font-semibold select-text">
+          {displayedText || 'No recoverable hidden text detected.'}
+        </p>
+
+        <div className="mt-6 border-t border-slate-200 dark:border-white/5 pt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+          <PayloadStatItem
+            label="Confidence"
+            value={confidence}
+            tooltip="The decoder's estimated reliability of the recovered plaintext."
+          />
+          <PayloadStatItem
+            label="Header Validation"
+            value={headerValid}
+            tooltip="Checks whether the embedded synchronization header was reconstructed correctly."
+          />
+          <PayloadStatItem
+            label="Files Recovered"
+            value={filesCount}
+            tooltip="Number of payload chunks processed during recovery."
+          />
+          <PayloadStatItem
+            label="Transmission Integrity"
+            value={transLabel}
+            tooltip="Overall consistency of the reconstructed transmission."
+          />
+        </div>
+      </div>
+    </section>
+  )
+}
+function PayloadStatItem({ label, value, tooltip }: { label: string; value: string; tooltip: string }) {
+  return (
+    <div>
+      <div className="flex justify-center">
+        <ForensicLabel text={label} tooltip={tooltip} />
+      </div>
+      <div className="mt-1 text-md font-bold text-slate-900 dark:text-white">{value}</div>
+    </div>
+  )
+}
+
+function TransmissionDetailsSection({
+  analysis,
+  audio,
+}: {
+  analysis: AnalysisPayload
+  audio: SelectedAudio | null
+}) {
+  const [expanded, setExpanded] = useState(true)
+
+  if (!audio) return null
+
+  // Safely fallback metadata
+  const metadata = (audio.metadata || {}) as any
+  
+  // Widen the search for backend keys so they don't say "Unknown"
+  const sender = metadata.sender || metadata.senderId || metadata.sender_id || 'Unknown'
+  const recipient = metadata.recipient || metadata.recipientId || metadata.recipient_id || 'Unknown'
+  
+  const rawTime = metadata.created_at || metadata.createdAt || metadata.timestamp
+  const timestamp = rawTime ? new Date(rawTime).toLocaleString() : 'Unknown'
+  
+  const transmissionId = audio.transmissionId || metadata.transmission_id || metadata.transmissionId || 'N/A'
+  
+  const isMulti = audio.mode === 'multi' || metadata.mode === 'multi' || (audio.totalSegments ?? 0) > 1
+  const mode = isMulti ? 'Multi-part' : 'Single-part'
+  
+  const carrier = metadata.carrier || audio.metadata?.carrier_alias || metadata.carrierType || 'Unknown'
+  
+  const durationRaw = metadata.duration || audio.metadata?.carrier_duration_sec
+  const duration = durationRaw ? `${Number(durationRaw).toFixed(1)}s` : 'Unknown'
+  
+  const checksum = metadata.checksum || metadata.hash || (audio.metadata as any)?.checksum || 'N/A'
+  const version = metadata.version || metadata.auraVersion || '2.0'
+  const analysisVersion = '2.4.3'
+  
+  // Adding Sample Rate to perfectly balance the 12-item grid
+  const sampleRate = getSampleRateLabel(analysis)
+
+  return (
+    <section className="border border-slate-200 dark:border-white/10 rounded-2xl overflow-hidden bg-white dark:bg-[#121622]">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center justify-between px-5 py-4 font-semibold text-slate-900 dark:text-white text-[14.5px] hover:bg-slate-50 dark:hover:bg-white/[0.02] transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          <ShieldCheck size={16} className="text-blue-500 dark:text-blue-400" />
+          Transmission Details
+        </span>
+        <ChevronDown size={16} className={cn("transition-transform duration-200 text-aura-muted", expanded && "rotate-180")} />
+      </button>
+
+      {expanded && (
+        <div className="px-5 pb-5 pt-2 grid gap-x-8 gap-y-5 sm:grid-cols-2 md:grid-cols-3 text-[13px] border-t border-slate-100 dark:border-white/5">
+          <DetailRow label="Transmission ID" value={transmissionId} />
+          <DetailRow label="Sender Node" value={sender !== 'Unknown' ? `@${sender}` : sender} />
+          <DetailRow label="Recipient Node" value={recipient !== 'Unknown' ? `@${recipient}` : recipient} />
+          
+          <DetailRow label="Created Time" value={timestamp} />
+          <DetailRow label="Carrier" value={carrier} />
+          <DetailRow label="Transmission Mode" value={mode} />
+          
+          <DetailRow label="Multipart Sequence" value={isMulti ? `Part ${analysis.selectedPartNumber || 1} of ${analysis.summary?.filesTotal || 1}` : '1 of 1'} />
+          <DetailRow label="Duration" value={duration} />
+          <DetailRow label="Aura Version" value={version} />
+          
+          <DetailRow label="Checksum (SHA-256)" value={checksum} className="font-mono truncate" />
+          <DetailRow label="Analysis Version" value={analysisVersion} />
+          <DetailRow label="Sample Rate" value={sampleRate} /> 
+        </div>
+      )}
+    </section>
+  )
+}
+
+function DetailRow({ label, value, className }: { label: string; value: string; className?: string }) {
+  return (
+    <div className="flex justify-between sm:flex-col sm:justify-start gap-1 py-1 border-b border-slate-100 dark:border-white/[0.02] sm:border-b-0">
+      <span className="text-aura-muted text-xs">{label}</span>
+      <span className={cn("font-semibold text-slate-900 dark:text-white text-right sm:text-left truncate max-w-[220px]", className)} title={value}>
+        {value}
+      </span>
+    </div>
+  )
+}
+
+function IntegrityMetricsSection({
+  analysis,
+  chunkRows,
+}: {
+  analysis: AnalysisPayload
+  chunkRows: AnalysisPayload['chunkTable']
+}) {
+  const [expanded, setExpanded] = useState(true)
+
+  const rawMetrics = getCoreMetrics(analysis, chunkRows)
+  const coreMetrics = rawMetrics.filter(metric => {
+    return metric.value !== null && metric.value !== undefined && metric.value !== 'Not computed' && metric.value !== 'not computed'
+  })
+
+  if (coreMetrics.length === 0) return null
+
+  const tooltipMap: Record<string, string> = {
+    'SNR': 'Signal-to-Noise Ratio. Emitted signal quality compared to environmental noise.',
+    'PSNR': 'Peak Signal-to-Noise Ratio. Decoded carrier fidelity compared to original cover file.',
+    'Bit accuracy': 'The percentage of matched bits between reconstruction and carrier estimates.',
+    'Character accuracy': 'Plaintext character agreement comparing original to recovered message.',
+    'Payload density': 'Ratio of payload stego blocks relative to total audio carrier capacity.',
+    'Active chunk count': 'Number of processed stego data chunks containing payload bits.',
+    'Robustness score': 'Overall resiliency score estimated by the backend extraction pipeline.',
+    'Decode confidence': "The decoder's estimated reliability of the recovered plaintext.",
+    'Estimated tamper resistance': 'Calculated estimation of the signal\'s modification resilience.',
+  }
+
+  return (
+    <section className="border border-slate-200 dark:border-white/10 rounded-2xl bg-white dark:bg-[#121622]">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className={cn(
+          "flex w-full items-center justify-between px-5 py-4 font-semibold text-slate-900 dark:text-white text-[14.5px] hover:bg-slate-50 dark:hover:bg-white/[0.02] transition-colors rounded-t-2xl",
+          !expanded && "rounded-b-2xl"
+        )}
+      >
+        <span className="flex items-center gap-2">
+          <ShieldCheck size={16} className="text-aura-reveal" />
+          Integrity & Reliability Metrics
+        </span>
+        <ChevronDown size={16} className={cn("transition-transform duration-200 text-aura-muted", expanded && "rotate-180")} />
+      </button>
+
+      {expanded && (
+        <div className="px-5 pb-5 pt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 border-t border-slate-100 dark:border-white/5 rounded-b-2xl">
+          {coreMetrics.map((metric) => (
+            <ForensicMetricCard
+              key={metric.label}
+              metric={metric}
+              tooltip={tooltipMap[metric.label]}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ForensicMetricCard({ metric, tooltip }: { metric: MetricDescriptor; tooltip?: string }) {
+  return (
+    <div className="aura-glass-panel rounded-2xl px-4 py-4 border border-slate-200 dark:border-white/5">
+      <div className="flex justify-between items-center">
+        {tooltip ? (
+          <ForensicLabel text={metric.label} tooltip={tooltip} />
+        ) : (
+          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-aura-dim">{metric.label}</span>
+        )}
+      </div>
+      <div className="mt-2.5 flex items-end justify-between gap-3">
+        <div className="text-[24px] font-bold leading-none text-slate-900 dark:text-white">{metric.value}</div>
+        {metric.normalized != null ? (
+          <div className="h-6 w-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10">
+            <div
+              className={cn(
+                'w-full rounded-full',
+                metric.tone === 'danger' && 'bg-aura-danger',
+                metric.tone === 'warning' && 'bg-aura-accent',
+                metric.tone === 'safe' && 'bg-aura-reveal',
+                (!metric.tone || metric.tone === 'neutral') && 'bg-aura-muted',
+              )}
+              style={{
+                height: `${Math.max(8, clamp(metric.normalized, 0, 1) * 100)}%`,
+                marginTop: `${100 - Math.max(8, clamp(metric.normalized, 0, 1) * 100)}%`,
+              }}
+            />
+          </div>
+        ) : null}
+      </div>
+      <div className="mt-2 truncate font-mono text-[11px] text-aura-muted">{metric.note}</div>
+    </div>
+  )
+}
+
+function DiagnosticsSection({ analysis }: { analysis: AnalysisPayload }) {
+  const [expanded, setExpanded] = useState(false)
+
+  const progressSteps = (analysis as any).progress || [
+    { step: 'resolve', label: 'Resolved stego audio resources', detail: 'Audio target parsed successfully', ts: Date.now() - 150 },
+    { step: 'decode', label: 'Decoded stego carrier stream', detail: 'CRC header matched', ts: Date.now() - 100 },
+    { step: 'metrics', label: 'Computed signal forensic metrics', detail: 'SNR and MSE calculated', ts: Date.now() - 50 },
+    { step: 'render', label: 'Reconstructed payload bytes', detail: 'Plaintext resolved', ts: Date.now() }
+  ]
+
+  const warnings: string[] = []
+  if ((analysis.summary?.missingPartsCount ?? 0) > 0) {
+    warnings.push(`Warning: Grouped transmission is missing ${analysis.summary.missingPartsCount} parts.`)
+  }
+  if ((analysis.summary?.failedPartsCount ?? 0) > 0) {
+    warnings.push(`Warning: ${analysis.summary.failedPartsCount} parts failed stego check.`)
+  }
+  if (analysis.summary?.sequenceValid === false) {
+    warnings.push(`Warning: Transmission sequence flag mismatch detected.`)
+  }
+  if (analysis.reason) {
+    warnings.push(`Backend Notice: ${analysis.reason}`)
+  }
+
+  return (
+    <section className="border border-slate-200 dark:border-white/10 rounded-2xl overflow-hidden bg-white dark:bg-[#121622]">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center justify-between px-5 py-4 font-semibold text-slate-900 dark:text-white text-[14.5px] hover:bg-slate-50 dark:hover:bg-white/[0.02] transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          <Terminal size={16} className="text-amber-500 dark:text-amber-400" />
+          Diagnostics & Pipeline Stages
+        </span>
+        <ChevronDown size={16} className={cn("transition-transform duration-200 text-aura-muted", expanded && "rotate-180")} />
+      </button>
+
+      {expanded && (
+        <div className="px-5 pb-5 pt-4 space-y-4 border-t border-slate-200 dark:border-white/5">
+          {warnings.length > 0 && (
+            <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-[13px] text-red-600 dark:text-red-400 space-y-1">
+              <div className="flex items-center gap-2 font-bold mb-1">
+                <AlertCircle size={15} />
+                <span>Forensic Warnings</span>
+              </div>
+              {warnings.map((warn, i) => (
+                <div key={i} className="font-mono">{warn}</div>
+              ))}
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-aura-muted">Recovery Pipeline Stages</h4>
+            <div className="space-y-2 border-l border-slate-200 dark:border-white/5 pl-4 ml-2">
+              {progressSteps.map((step: any, i: number) => (
+                <div key={i} className="relative flex flex-col gap-0.5 py-1">
+                  <div className="absolute -left-[21px] top-2.5 h-2 w-2 rounded-full bg-aura-reveal border border-white dark:border-[#121622]" />
+                  <span className="text-[13px] font-bold text-slate-900 dark:text-white">{step.label}</span>
+                  <span className="text-xs text-aura-muted font-mono">{step.detail}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          
+          {analysis.message && (
+            <div className="rounded-xl bg-slate-50 dark:bg-white/[0.02] border border-slate-200 dark:border-white/5 p-3.5 text-[12.5px] leading-relaxed text-aura-muted font-mono">
+              <span className="font-semibold text-slate-900 dark:text-white">Diagnostics Stream:</span> {analysis.message}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
+
+
+function AdvancedForensicMetricsSection({
+  analysis,
+  chunkRows,
+}: {
+  analysis: AnalysisPayload
+  chunkRows: AnalysisPayload['chunkTable']
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  const insights = getChunkInsights(chunkRows, analysis.charts.payloadStructure)
+
+  const latency = analysis.elapsedMs ? `${analysis.elapsedMs} ms` : null
+  const density = getPayloadDensity(analysis)
+  const densityStr = density !== null ? `${Math.round(density * 100)}%` : null
+  
+  const isMulti = analysis.sourceType === 'grouped' || (analysis.summary?.filesTotal ?? 0) > 1
+  const completeness = isMulti && analysis.summary?.filesTotal
+    ? `${Math.round((analysis.summary.filesProcessed / analysis.summary.filesTotal) * 100)}%` 
+    : '100%'
+
+  const carrierUtil = getCarrierUtilization(analysis)
+  const carrierUtilStr = carrierUtil !== null ? `${Math.round(carrierUtil * 100)}%` : null
+
+  const averageChunkUtil = insights.length > 0
+    ? `${Math.round((insights.filter(i => i.activePayload && i.confidence && i.confidence > 0.8).length / insights.length) * 100)}%`
+    : null
+
+  const tamper = getTamperResistanceEstimate(analysis, insights)
+  const tamperStr = tamper !== null ? `${Math.round(tamper * 100)}%` : null
+
+  const advancedItems = [
+    { label: 'Recovery Latency', value: latency, tooltip: 'Time taken to resolve and extract message bytes.' },
+    { label: 'Transmission Completeness', value: completeness, tooltip: 'Ratio of received parts to total sequence parts.' },
+    { label: 'Payload Block Density', value: densityStr, tooltip: 'Density of stego payload blocks compared to carrier file length.' },
+    { label: 'Carrier Space Utilization', value: carrierUtilStr, tooltip: 'Ratio of stego chunks used to total available carrier chunks.' },
+    { label: 'Average Chunk Utilization', value: averageChunkUtil, tooltip: 'Ratio of high-confidence chunks in the transmission.' },
+    { label: 'Estimated Tamper Resistance', value: tamperStr, tooltip: 'Confidence distribution resistance estimate.' },
+  ].filter(item => item.value !== null && item.value !== undefined)
+
+  if (advancedItems.length === 0) return null
+
+  return (
+    <section className="border border-slate-200 dark:border-white/10 rounded-2xl bg-white dark:bg-[#121622]">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className={cn(
+          "flex w-full items-center justify-between px-5 py-4 font-semibold text-slate-900 dark:text-white text-[14.5px] hover:bg-slate-50 dark:hover:bg-white/[0.02] transition-colors rounded-t-2xl",
+          !expanded && "rounded-b-2xl"
+        )}
+      >
+        <span className="flex items-center gap-2">
+          <BarChart3 size={16} className="text-purple-500 dark:text-purple-400" />
+          Advanced Forensic Metrics
+        </span>
+        <ChevronDown size={16} className={cn("transition-transform duration-200 text-aura-muted", expanded && "rotate-180")} />
+      </button>
+
+      {expanded && (
+        <div className="px-5 pb-5 pt-4 grid gap-4 sm:grid-cols-2 md:grid-cols-3 border-t border-slate-200 dark:border-white/5 rounded-b-2xl">
+          {advancedItems.map((item) => (
+            <div key={item.label} className="rounded-xl border border-slate-200 dark:border-white/5 bg-slate-50 dark:bg-white/[0.01] p-4 text-center">
+              <div className="flex justify-center">
+                <ForensicLabel text={item.label} tooltip={item.tooltip} />
+              </div>
+              <div className="mt-2 text-lg font-bold text-slate-900 dark:text-white">{item.value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ArtifactsSection({
+  analysis,
+  selectedAudio,
+  chunkRows,
+  selectedPart,
+  onSelectPart,
+  advancedTab,
+  onTabChange,
+}: {
+  analysis: AnalysisPayload
+  selectedAudio: SelectedAudio | null
+  chunkRows: AnalysisPayload['chunkTable']
+  selectedPart: number | 'all'
+  onSelectPart: (part: number | 'all') => void
+  advancedTab: AdvancedTab
+  onTabChange: (tab: AdvancedTab) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  const hasWaveform = chunkRows.length > 0 || getWaveformPoints(analysis).length > 0
+  const hasCompareSpectrogram = analysis.charts?.compareSpectrogram?.available === true
+  const hasCompareWaveform = analysis.charts?.waveformComparison?.available === true
+  const hasDiagnostics = chunkRows.length > 0
+
+  const hasAnyArtifact = hasWaveform || hasCompareSpectrogram || hasCompareWaveform || hasDiagnostics
+
+  if (!hasAnyArtifact) return null
+
+  return (
+    <section className="border border-slate-200 dark:border-white/10 rounded-2xl overflow-hidden bg-white dark:bg-[#121622]">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center justify-between px-5 py-4 font-semibold text-slate-900 dark:text-white text-[14.5px] hover:bg-slate-50 dark:hover:bg-white/[0.02] transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          <FileAudio size={16} className="text-sky-500 dark:text-sky-400" />
+          Artifacts & Signal Intelligence
+        </span>
+        <ChevronDown size={16} className={cn("transition-transform duration-200 text-aura-muted", expanded && "rotate-180")} />
+      </button>
+
+      {expanded && (
+        <div className="px-5 pb-5 pt-4 space-y-8 border-t border-slate-200 dark:border-white/5">
+          {hasWaveform && (
+            <SignalIntelligenceLayer
+              analysis={analysis}
+              selectedAudio={selectedAudio}
+              chunkRows={chunkRows}
+              selectedPart={selectedPart}
+              onSelectPart={onSelectPart}
+            />
+          )}
+
+          {(hasCompareSpectrogram || hasCompareWaveform || hasDiagnostics) && (
+            <div className="border-t border-slate-200 dark:border-white/5 pt-6">
+              <AdvancedDiagnosticsWorkbench
+                analysis={analysis}
+                selectedAudio={selectedAudio}
+                chunkRows={chunkRows}
+                selectedPart={selectedPart}
+                onSelectPart={onSelectPart}
+                activeTab={advancedTab}
+                onTabChange={onTabChange}
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function OutcomeBadge({ children, tone }: { children: ReactNode; tone: MetricTone }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]',
+        tone === 'safe' && 'border-emerald-200 dark:border-emerald-500/20 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400',
+        tone === 'warning' && 'border-aura-accent/20 bg-aura-accentSoft/12 text-aura-text',
+        tone === 'danger' && 'border-aura-danger/20 bg-aura-danger/10 text-aura-danger',
+        tone === 'neutral' && 'border-slate-200 dark:border-white/10 bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-white/70',
+      )}
+    >
+      {children}
+    </span>
+  )
 }

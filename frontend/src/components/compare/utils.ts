@@ -167,17 +167,17 @@ export function diffPayloads(expected: string, recovered: string): DiffToken[] {
 }
 
 export function formatSnr(value: number | null | undefined) {
-  if (value == null || !Number.isFinite(value)) return 'Not reported'
+  if (value == null || !Number.isFinite(value)) return 'Not computed'
   return `${value.toFixed(1)} dB`
 }
 
 export function formatNullableDecimal(value: number | null | undefined, fractionDigits = 4) {
-  if (value == null || !Number.isFinite(value)) return 'Not reported'
+  if (value == null || !Number.isFinite(value)) return 'Not computed'
   return value.toFixed(fractionDigits)
 }
 
 export function formatPercentValue(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return 'Not reported'
+  if (value == null || !Number.isFinite(value)) return 'Not computed'
   return `${(value * 100).toFixed(0)}%`
 }
 
