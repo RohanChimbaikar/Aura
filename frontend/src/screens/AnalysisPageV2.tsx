@@ -733,7 +733,7 @@ function SignalIntelligenceLayer({
   const [playbackRatio, setPlaybackRatio] = useState(0)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const points = getWaveformPoints(analysis)
-  const chunkInsights = getChunkInsights(chunkRows, analysis.charts.payloadStructure)
+  const chunkInsights = getChunkInsights(chunkRows, analysis)
   const parts = getAvailableParts(analysis)
   const syncAvailable = analysis.sourceType !== 'grouped' || selectedPart !== 'all'
 
@@ -818,10 +818,19 @@ function SignalIntelligenceLayer({
 
 function TimelineLegend() {
   return (
-    <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] text-aura-muted">
-      <LegendDot color="rgb(91,173,190)" label="payload-active" />
-      <LegendDot color="rgb(126,132,184)" label="confidence" />
-      <LegendDot color="rgb(232,116,101)" label="corruption pressure" />
+    <div className="flex flex-wrap gap-x-6 gap-y-2 font-mono text-[10px] uppercase tracking-[0.1em] text-aura-muted">
+      <div className="flex items-center gap-2">
+        <span className="h-2 w-3 rounded-[2px] bg-[rgba(91,173,190,0.6)]" />
+        <span>Payload Region</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="h-2 w-3 rounded-[2px] bg-[rgba(126,132,184,0.7)]" />
+        <span>Neural Certainty</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="h-2 w-3 rounded-[2px] bg-[rgba(232,116,101,0.8)]" />
+        <span>Integrity Pressure</span>
+      </div>
     </div>
   )
 }
@@ -867,6 +876,7 @@ function SignalTimeline({
           </linearGradient>
         </defs>
 
+        {/* Background Grid Lines */}
         {Array.from({ length: 9 }).map((_, index) => {
           const x = (index / 8) * width
           return (
@@ -895,16 +905,28 @@ function SignalTimeline({
           )
         })}
 
+        {/* DATA-DRIVEN FORENSIC BLOCKS 
+          This maps the PyTorch confidence and ECC errors to opacity gradients.
+        */}
         {chunkInsights.map((insight, index) => {
           const chunkWidth = width / Math.max(1, chunkInsights.length)
           const x = index * chunkWidth
+          
           const confidence = insight.confidence ?? 0
-          const payloadOpacity = insight.activePayload ? 0.1 + confidence * 0.2 : 0
-          const corruptionOpacity = insight.corruption > 0.1 ? 0.06 + insight.corruption * 0.3 : 0
+          const hasEccError = insight.row.correctionApplied || insight.row.correctionCount > 0
+          
+          // 1. High confidence = deeply saturated Teal/Purple. Low confidence = faint.
+          const payloadOpacity = insight.activePayload ? 0.2 + (confidence * 0.6) : 0.05
+          
+          // 2. ECC errors immediately trigger 85% opacity Red. Otherwise, map to corruption metric.
+          const corruptionOpacity = hasEccError ? 0.85 : (insight.corruption > 0.1 ? 0.1 + insight.corruption * 0.4 : 0)
+          
           const certaintyHeight = Math.max(4, confidence * 34)
 
           return (
             <g key={`${insight.row.partNumber ?? 0}-${insight.row.chunkIndex}-${insight.order}`}>
+              
+              {/* Base Confidence Block */}
               <rect
                 x={x}
                 y={36}
@@ -913,14 +935,20 @@ function SignalTimeline({
                 fill="rgba(91,173,190,0.8)"
                 opacity={payloadOpacity}
               />
-              <rect
-                x={x}
-                y={36}
-                width={Math.max(2, chunkWidth - 1)}
-                height={height - 72}
-                fill="rgba(232,116,101,0.9)"
-                opacity={corruptionOpacity}
-              />
+              
+              {/* Corruption Pressure Block (Red) */}
+              {corruptionOpacity > 0 && (
+                <rect
+                  x={x}
+                  y={36}
+                  width={Math.max(2, chunkWidth - 1)}
+                  height={height - 72}
+                  fill="rgba(232,116,101,0.9)"
+                  opacity={corruptionOpacity}
+                />
+              )}
+              
+              {/* Certainty Meter (Bottom Edge) */}
               <rect
                 x={x + 1}
                 y={height - 46 - certaintyHeight}
@@ -929,6 +957,7 @@ function SignalTimeline({
                 fill={metricColor(insight.tone)}
                 opacity={0.72}
               />
+              
               <line
                 x1={x}
                 x2={x}
@@ -936,20 +965,24 @@ function SignalTimeline({
                 y2={height - 28}
                 stroke="rgb(var(--aura-border) / 0.13)"
               />
-              {insight.row.correctionApplied || insight.row.correctionCount > 0 ? (
+              
+              {/* ECC Strike-through Line (If error was caught) */}
+              {hasEccError ? (
                 <line
                   x1={x + chunkWidth / 2}
                   x2={x + chunkWidth / 2}
                   y1={40}
                   y2={height - 34}
-                  stroke="rgba(232,116,101,0.78)"
-                  strokeDasharray="4 6"
+                  stroke="rgba(232,116,101,1.0)"
+                  strokeWidth={2}
+                  strokeDasharray="4 4"
                 />
               ) : null}
             </g>
           )
         })}
 
+        {/* Audio Waveform Overlays */}
         <path
           d={path}
           fill="none"
@@ -961,6 +994,7 @@ function SignalTimeline({
           <path d={`${path} L ${width} ${baseline} L 0 ${baseline} Z`} fill="rgba(91,173,190,0.06)" />
         ) : null}
 
+        {/* Playhead Sync Line */}
         {playbackRatio > 0 ? (
           <line
             x1={playbackRatio * width}
@@ -972,6 +1006,7 @@ function SignalTimeline({
           />
         ) : null}
 
+        {/* Hover Inspector Line */}
         {hoverIndex != null && chunkInsights.length ? (
           <line
             x1={((hoverIndex + 0.5) / chunkInsights.length) * width}
@@ -989,6 +1024,7 @@ function SignalTimeline({
         </div>
       ) : null}
 
+      {/* Hover Tooltip */}
       {hoverInsight ? (
         <div className="aura-tooltip-card pointer-events-none absolute bottom-4 left-4 z-20 w-[min(330px,calc(100%-2rem))] rounded-[14px] px-3 py-3 font-mono text-[11px] text-aura-muted">
           <div className="flex items-center justify-between gap-3">
@@ -1135,10 +1171,10 @@ function AdvancedDiagnosticsWorkbench({
 }
 
 function WaveformDiagnosticsTab({ analysis }: { analysis: AnalysisPayload }) {
-  const signal = getWaveformPoints(analysis)
+  // const signal = getWaveformPoints(analysis)
   const comparison = analysis.charts.waveformComparison
   const traces = [
-    { title: 'Signal waveform', points: signal, tone: 'signal' as const },
+    // { title: 'Signal waveform', points: signal, tone: 'signal' as const },
     { title: 'Cover waveform', points: comparison?.coverWaveform ?? [], tone: 'cover' as const },
     { title: 'Stego waveform', points: comparison?.stegoWaveform ?? [], tone: 'signal' as const },
     {
@@ -1178,12 +1214,12 @@ function WaveformTrace({
   const width = 720
   const height = 120
   const path = pointsToPath(points, width, height / 2, height / 2 - 14)
-  const stroke =
+ const stroke =
     tone === 'residual'
-      ? 'rgb(232,116,101)'
+      ? 'rgb(232,116,101)' // Alert Red/Orange
       : tone === 'cover'
-        ? 'rgb(176,184,198)'
-        : 'rgb(91,173,190)'
+        ? 'rgb(0,204,102)' // Deeper, professional Slate Grey
+        : 'rgb(91,173,190)'  // Aura Teal
 
   return (
     <div className="rounded-[12px] border border-aura-border/10 bg-aura-bg/20 px-3 py-3">
@@ -1371,7 +1407,7 @@ function ChunkDiagnosticsTab({
   onSelectPart: (part: number | 'all') => void
 }) {
   const [expanded, setExpanded] = useState<string | null>(null)
-  const insights = getChunkInsights(chunkRows, analysis.charts.payloadStructure)
+  const insights = getChunkInsights(chunkRows, analysis)
   const parts = getAvailableParts(analysis)
 
   if (!insights.length) {
@@ -1500,7 +1536,7 @@ function RobustnessDiagnosticsTab({
   analysis: AnalysisPayload
   chunkRows: AnalysisPayload['chunkTable']
 }) {
-  const insights = getChunkInsights(chunkRows, analysis.charts.payloadStructure)
+  const insights = getChunkInsights(chunkRows, analysis)
   const snrRows = chunkRows.filter((row) => typeof row.snrDb === 'number')
   const snrValues = snrRows.map((row) => row.snrDb as number)
   const minSnr = snrValues.length ? Math.min(...snrValues) : null
@@ -1600,7 +1636,7 @@ function DecoderConfidenceTab({
   analysis: AnalysisPayload
   chunkRows: AnalysisPayload['chunkTable']
 }) {
-  const insights = getChunkInsights(chunkRows, analysis.charts.payloadStructure)
+  const insights = getChunkInsights(chunkRows, analysis)
   const emittedConfidence = insights.filter((insight) => insight.confidence != null)
   const average = averageNullable(emittedConfidence.map((insight) => insight.confidence))
 
@@ -2138,7 +2174,7 @@ function getCoreMetrics(
   analysis: AnalysisPayload,
   chunkRows: AnalysisPayload['chunkTable'],
 ): MetricDescriptor[] {
-  const insights = getChunkInsights(chunkRows, analysis.charts.payloadStructure)
+  const insights = getChunkInsights(chunkRows, analysis)
   const bitAccuracy = getAverageBitAccuracy(insights)
   const snrAverage =
     averageNullable(chunkRows.map((row) => (typeof row.snrDb === 'number' ? row.snrDb : null))) ??
@@ -2169,13 +2205,13 @@ function getCoreMetrics(
       normalized: psnrValue == null ? null : clamp(psnrValue / 60, 0, 1),
       tone: psnrValue == null ? 'neutral' : psnrValue >= 40 ? 'safe' : psnrValue >= 30 ? 'warning' : 'danger',
     },
-    {
-      label: 'Bit accuracy',
-      value: formatPercentValue(bitAccuracy),
-      note: bitAccuracy == null ? 'bit agreement absent' : 'chunk bit agreement',
-      normalized: bitAccuracy,
-      tone: getAccuracyTone(bitAccuracy),
-    },
+    // {
+    //   label: 'Bit accuracy',
+    //   value: formatPercentValue(bitAccuracy),
+    //   note: bitAccuracy == null ? 'bit agreement absent' : 'chunk bit agreement',
+    //   normalized: bitAccuracy,
+    //   tone: getAccuracyTone(bitAccuracy),
+    // },
     {
       label: 'Character accuracy',
       value: charAccuracy == null ? 'Unavailable' : formatPercentValue(charAccuracy),
@@ -2221,20 +2257,86 @@ function getCoreMetrics(
 
 function getChunkInsights(
   chunkRows: AnalysisPayload['chunkTable'],
-  structure: AnalysisPayload['charts']['payloadStructure'],
+  analysis: AnalysisPayload
 ): ChunkInsight[] {
-  return chunkRows.map((row, order) => {
-    const confidence = typeof row.confidence === 'number' ? normalizePercent(row.confidence) : null
-    const bitAccuracy = typeof row.bitAgreement === 'number' ? normalizePercent(row.bitAgreement) : null
-    const role = getPayloadRole(order, row, structure)
-    const correctionPressure = clamp((row.correctionCount || 0) / 4, 0, 1)
-    const bitPressure = bitAccuracy == null ? 0 : 1 - bitAccuracy
-    const confidencePressure = confidence == null ? 0 : 1 - confidence
-    const stftPressure =
-      typeof row.stftDeltaScore === 'number' ? clamp(row.stftDeltaScore * 5, 0, 1) : 0
-    const structuralPressure = row.isMissing || row.isDuplicate ? 1 : 0
-    const statusPressure = row.status === 'low_confidence' || row.status === 'missing' ? 0.35 : 0
-    const corruption = clamp(
+  const structure = analysis.charts.payloadStructure;
+  const diagnostics = (analysis as any).receiverDiagnostics || {};
+
+  let realConfidences: number[] = [];
+  const errorChunkIndices = new Set<number>();
+  
+  const repeatFactor = diagnostics.repeat_factor || 3;
+  const eccScheme = diagnostics.ecc_scheme || 0;
+  const chunksPerChar = (eccScheme === 1 ? 4 : 2) * repeatFactor;
+  const headerBlocks = Math.max(0, structure.headerBlocks);
+
+  const processDiag = (diag: any, chunkOffset: number) => {
+    if (!diag) return;
+    
+    const headerConf = diag.header_chunk_confidences || [];
+    const payloadConf = diag.payload_chunk_confidences || [];
+    realConfidences.push(...headerConf, ...payloadConf);
+
+    // 1. Map Payload ECC Errors
+    const eccErrors = diag.ecc_error_locations || [];
+    eccErrors.forEach((err: any) => {
+      const charIdx = err.char_index ?? err.charIndex ?? 0;
+      const startChunk = chunkOffset + headerBlocks + (charIdx * chunksPerChar);
+      for (let i = 0; i < chunksPerChar; i++) {
+        errorChunkIndices.add(startChunk + i);
+      }
+    });
+
+    // 2. Map Header ECC Errors (NEW)
+    if (diag.header_checksum_corrected && typeof diag.header_correction_byte === 'number') {
+      // The header data chunks start after the 12-chunk sync pattern
+      const syncPatternOffset = 12; 
+      // 1 byte = 2 nibbles = 2 * repeatFactor chunks
+      const startChunk = chunkOffset + syncPatternOffset + (diag.header_correction_byte * 2 * repeatFactor);
+      
+      // Flag all chunks associated with this corrupted byte
+      for (let i = 0; i < (2 * repeatFactor); i++) {
+        errorChunkIndices.add(startChunk + i);
+      }
+    }
+  };
+
+  if (diagnostics.segments && Array.isArray(diagnostics.segments)) {
+    let currentOffset = 0;
+    diagnostics.segments.forEach((seg: any) => {
+      const segDiag = seg.diagnostics || {};
+      processDiag(segDiag, currentOffset);
+      const totalChunks = segDiag.total_chunks || 
+        ((segDiag.header_chunk_confidences?.length || 0) + (segDiag.payload_chunk_confidences?.length || 0));
+      currentOffset += totalChunks;
+    });
+  } else {
+    processDiag(diagnostics, 0);
+  }
+
+  return chunkRows.map((row, visualOrder) => {
+    const globalIndex = row.chunkIndex; 
+    
+    const rawConfidence = globalIndex < realConfidences.length ? realConfidences[globalIndex] : row.confidence;
+    const confidence = typeof rawConfidence === 'number' ? normalizePercent(rawConfidence) : null;
+
+    const bitAccuracy = typeof row.bitAgreement === 'number' ? normalizePercent(row.bitAgreement) : null;
+    const role = getPayloadRole(visualOrder, row, structure);
+
+    // Did PyTorch/ECC flag this exact chunk as corrupted/corrected?
+    const hasRealEccError = errorChunkIndices.has(globalIndex);
+    const hasSimulatedError = row.correctionApplied || (row.correctionCount || 0) > 0;
+    const isCorrupted = hasRealEccError || hasSimulatedError;
+
+    const correctionPressure = isCorrupted ? 1 : clamp((row.correctionCount || 0) / 4, 0, 1);
+    const bitPressure = bitAccuracy == null ? 0 : 1 - bitAccuracy;
+    const confidencePressure = confidence == null ? 0 : 1 - confidence;
+    const stftPressure = typeof row.stftDeltaScore === 'number' ? clamp(row.stftDeltaScore * 5, 0, 1) : 0;
+    const structuralPressure = row.isMissing || row.isDuplicate ? 1 : 0;
+    const statusPressure = row.status === 'low_confidence' || row.status === 'missing' ? 0.35 : 0;
+
+    // If ECC caught it, hard-peg corruption to 1.0 (100%), else calculate normally
+    const corruption = isCorrupted ? 1.0 : clamp(
       structuralPressure ||
         confidencePressure * 0.36 +
           bitPressure * 0.44 +
@@ -2243,21 +2345,25 @@ function getChunkInsights(
           statusPressure,
       0,
       1,
-    )
+    );
 
     return {
-      row,
-      order,
+      row: {
+        ...row,
+        // Inject the real correction status back into the row so the UI Tooltip shows it
+        correctionApplied: isCorrupted,
+        correctionCount: isCorrupted ? Math.max(1, row.correctionCount || 0) : row.correctionCount,
+      },
+      order: visualOrder,
       role,
       activePayload: role === 'header' || role === 'payload' || role === 'redundancy',
       confidence,
       bitAccuracy,
       corruption,
       tone: getChunkTone(row, confidence, corruption),
-    }
-  })
+    };
+  });
 }
-
 function getPayloadRole(
   order: number,
   row: AnalysisPayload['chunkTable'][number],
@@ -3084,7 +3190,7 @@ function AdvancedForensicMetricsSection({
 }) {
   const [expanded, setExpanded] = useState(false)
 
-  const insights = getChunkInsights(chunkRows, analysis.charts.payloadStructure)
+  const insights = getChunkInsights(chunkRows, analysis)
 
   const latency = analysis.elapsedMs ? `${analysis.elapsedMs} ms` : null
   const density = getPayloadDensity(analysis)

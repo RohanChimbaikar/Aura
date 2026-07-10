@@ -99,6 +99,14 @@ def create_app() -> Flask:
     def outputs_file(filename: str):
         return send_from_directory(OUTPUT_DIR, filename)
 
+
+    @app.route('/aura_carrier_bank/<path:filename>')
+    def serve_carrier_bank(filename):
+        # Assuming aura_carrier_bank is in the same directory as app.py
+        # Adjust the path if it is located somewhere else!
+        carrier_dir = os.path.join(os.path.dirname(__file__), 'aura_carrier_bank')
+        return send_from_directory(carrier_dir, filename)
+
     return app
 
 

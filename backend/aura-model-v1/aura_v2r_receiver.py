@@ -13,17 +13,12 @@ import torchaudio
 # AURA V2-R RECEIVER
 #
 # FINAL LENGTH-HEADER + POST-PROCESSING VERSION
+# - Batched PyTorch Inference (RAM-safe)
+# - Mixed Precision (AMP) Enabled
 # - Do NOT peak-normalize stego input
-# - Keeps same decode logic
-# - Adds 2-byte length-header support
 # - Decodes header first, then exact payload only
 # - Ignores extra tail audio after payload
 # - Adds deterministic post-processing correction
-# - Prints:
-#     1) Header info
-#     2) Raw decoded text
-#     3) Corrected text
-#     4) Changed words
 # ============================================================
 
 # ------------------------------------------------------------
@@ -177,6 +172,7 @@ def decode_payload_ecc(voted_nibbles, ecc_scheme):
     payload_bytes = bytearray()
     uncorrectable_count = 0
     corrected_bits = 0
+    error_locations = []  # NEW: Track where errors occur for the frontend
     
     if ecc_scheme == 1:
         num_chars = len(voted_nibbles) // 4
@@ -189,8 +185,13 @@ def decode_payload_ecc(voted_nibbles, ecc_scheme):
             decoded_hi, unc_hi, corr_hi = hamming_8_4_decode_nibble(hi_hi, hi_lo)
             decoded_lo, unc_lo, corr_lo = hamming_8_4_decode_nibble(lo_hi, lo_lo)
             
+            # Log the exact character index if an error was found
             if unc_hi or unc_lo:
                 uncorrectable_count += 1
+                error_locations.append({"char_index": i, "status": "uncorrectable"})
+            elif corr_hi > 0 or corr_lo > 0:
+                error_locations.append({"char_index": i, "status": "corrected"})
+                
             corrected_bits += corr_hi + corr_lo
             
             char_byte = ((decoded_hi & 0x0F) << 4) | (decoded_lo & 0x0F)
@@ -203,9 +204,7 @@ def decode_payload_ecc(voted_nibbles, ecc_scheme):
             char_byte = ((hi & 0x0F) << 4) | (lo & 0x0F)
             payload_bytes.append(char_byte)
             
-    return bytes(payload_bytes), uncorrectable_count, corrected_bits
-
-
+    return bytes(payload_bytes), uncorrectable_count, corrected_bits, error_locations
 def _unpack_header_bytes(
     header_bytes,
     checksum_corrected=False,
@@ -337,10 +336,8 @@ def find_alignment(decoder, wav, cfg, device):
         test_wav = wav[:, offset:offset + num_test_chunks * chunk_samples]
         test_chunks = chunk_audio_tensor(test_wav, chunk_samples)
         
-        pred_nibbles = []
-        for i in range(test_chunks.size(0)):
-            n = decode_single_chunk_to_nibble(decoder, test_chunks[i:i+1], cfg, device)
-            pred_nibbles.append(n)
+        # THE FIX: Unpack the tuple here by adding `, _`
+        pred_nibbles, _ = decode_chunk_block_to_nibbles(decoder, test_chunks, cfg, device, batch_size=32)
             
         for shift in [-2, -1, 0, 1, 2]:
             total_bits = 0
@@ -364,8 +361,6 @@ def find_alignment(decoder, wav, cfg, device):
             break
             
     return best_offset, best_shift, min_ber
-
-
 # ============================================================
 # AUDIO / STFT
 # ============================================================
@@ -427,13 +422,57 @@ def logits_to_bits4(logits):
 
 
 @torch.no_grad()
-def decode_single_chunk_to_nibble(decoder, stego_chunk_wav, cfg, device):
-    X = stft_complex_batch(stego_chunk_wav.to(device), cfg)
-    logmag, _ = complex_to_logmag_phase(X)
-    inp = logmag.unsqueeze(1)
-    logits = decoder(inp)
-    bits = logits_to_bits4(logits)[0].cpu().tolist()
-    return bits4_to_nibble(bits)
+def decode_chunk_block_to_nibbles(decoder, chunk_block, cfg, device, batch_size=32):
+    """
+    Decodes a block of audio chunks using native PyTorch batching.
+    Processes in mini-batches to protect OS RAM and disk swapping, 
+    and uses AMP (mixed precision) for speed.
+    
+    Returns:
+      pred_nibbles (list): The decoded integer nibbles.
+      chunk_confidences (list): The confidence score (0.0 to 1.0) for each chunk.
+    """
+    pred_nibbles = []
+    chunk_confidences = []  # NEW: Store the math for the frontend
+    num_chunks = chunk_block.size(0)
+    
+    for i in range(0, num_chunks, batch_size):
+        # 1. Grab a mini-batch of chunks
+        batch = chunk_block[i : i + batch_size].to(device)
+        
+        # 2. Process STFT and Log-Mag for the entire batch at once
+        X = stft_complex_batch(batch, cfg)
+        logmag, _ = complex_to_logmag_phase(X)
+        inp = logmag.unsqueeze(1)  # Shape: (Batch, 1, Freq, Time)
+        
+        # 3. Native batched inference with Automatic Mixed Precision
+        with torch.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
+            logits = decoder(inp)
+            
+        # --- NEW: CONFIDENCE MATH ---
+        # Convert raw logits to probabilities (0.0 to 1.0)
+        probs = torch.sigmoid(logits)
+        
+        # Calculate how far the prob is from 0.5 (guessing). 
+        # abs(prob - 0.5) * 2 maps the distance to a clean 0.0 to 1.0 scale.
+        bit_confidences = torch.abs(probs - 0.5) * 2.0
+        
+        # Average the 4 bit confidences to get the overall chunk confidence
+        batch_chunk_conf = bit_confidences.mean(dim=1)
+        
+        # Get the hard 1s and 0s
+        bits_batch = (probs >= 0.5).long()
+        
+        # --- CPU TRANSFER ---
+        # Move to CPU for list appending to avoid GPU bottlenecks
+        bits_list = bits_batch.cpu().tolist()
+        conf_list = batch_chunk_conf.cpu().tolist()
+        
+        for bits, conf in zip(bits_list, conf_list):
+            pred_nibbles.append(bits4_to_nibble(bits))
+            chunk_confidences.append(round(conf, 4))  # Rounding for cleaner JSON payload
+            
+    return pred_nibbles, chunk_confidences
 
 
 def majority_vote_nibble_triplet(n0, n1, n2):
@@ -448,42 +487,32 @@ def majority_vote_nibble_triplet(n0, n1, n2):
     return bits4_to_nibble(voted)
 
 
-def majority_vote_repeated_nibbles(pred_nibbles, repeat_factor=3):
+def majority_vote_repeated_nibbles(pred_nibbles, chunk_confidences, repeat_factor=3):
     assert len(pred_nibbles) % repeat_factor == 0
-    out = []
+    assert len(chunk_confidences) == len(pred_nibbles)
+    
+    voted_nibbles = []
+    voted_confidences = []
+    
     for i in range(0, len(pred_nibbles), repeat_factor):
-        group = pred_nibbles[i:i + repeat_factor]
+        group_nibbles = pred_nibbles[i:i + repeat_factor]
+        group_conf = chunk_confidences[i:i + repeat_factor]
+
+        # Average the confidence of the redundant chunks
+        avg_conf = sum(group_conf) / repeat_factor
+        voted_confidences.append(round(avg_conf, 4))
 
         if repeat_factor == 3:
-            out.append(majority_vote_nibble_triplet(group[0], group[1], group[2]))
+            voted_nibbles.append(majority_vote_nibble_triplet(group_nibbles[0], group_nibbles[1], group_nibbles[2]))
         else:
-            bit_lists = [nibble_to_bits4(n) for n in group]
+            bit_lists = [nibble_to_bits4(n) for n in group_nibbles]
             voted_bits = []
             for b in range(4):
                 s = sum(x[b] for x in bit_lists)
                 voted_bits.append(1 if s >= (repeat_factor // 2 + 1) else 0)
-            out.append(bits4_to_nibble(voted_bits))
-    return out
-
-
-@torch.no_grad()
-def decode_nibbles_from_chunk_block(decoder, chunk_block, cfg, device):
-    """
-    Decode a block of chunks into:
-      pred_chunk_nibbles, voted_nibbles
-    """
-    pred_chunk_nibbles = []
-
-    for i in range(chunk_block.size(0)):
-        pred_n = decode_single_chunk_to_nibble(decoder, chunk_block[i:i + 1], cfg, device)
-        pred_chunk_nibbles.append(pred_n)
-
-    voted_nibbles = majority_vote_repeated_nibbles(
-        pred_chunk_nibbles,
-        repeat_factor=cfg["repeat_factor"]
-    )
-
-    return pred_chunk_nibbles, voted_nibbles
+            voted_nibbles.append(bits4_to_nibble(voted_bits))
+            
+    return voted_nibbles, voted_confidences
 
 
 # ============================================================
@@ -491,7 +520,6 @@ def decode_nibbles_from_chunk_block(decoder, chunk_block, cfg, device):
 # ============================================================
 
 # Small built-in vocabulary for common natural demo words.
-# You can expand this anytime.
 AURA_COMMON_WORDS = {
     "a", "an", "and", "are", "at", "be", "behind", "bring", "by", "call",
     "come", "door", "for", "from", "go", "hello", "help", "here", "hide",
@@ -700,16 +728,14 @@ def main():
             f"Expected {header_chunks_needed} header chunks at start index {header_start}, got {header_block.size(0)}."
         )
 
-    # Decode header chunks
-    header_pred_chunk_nibbles = []
-    for i in range(header_chunks_needed):
-        n = decode_single_chunk_to_nibble(decoder, header_block[i:i+1], cfg, device)
-        header_pred_chunk_nibbles.append(n)
+    # Decode header chunks (Batched) - NOW EXTRACTING CONFIDENCE
+    header_pred_chunk_nibbles, header_chunk_conf = decode_chunk_block_to_nibbles(
+        decoder, header_block, cfg, device, batch_size=32
+    )
 
-    # Majority vote on header nibbles
-    header_voted_nibbles = majority_vote_repeated_nibbles(
-        header_pred_chunk_nibbles,
-        repeat_factor=repeat_factor
+    # Majority vote on header nibbles - NOW EXTRACTING VOTED CONFIDENCE
+    header_voted_nibbles, header_voted_conf = majority_vote_repeated_nibbles(
+        header_pred_chunk_nibbles, header_chunk_conf, repeat_factor=repeat_factor
     )
 
     # Unpack the header
@@ -724,6 +750,8 @@ def main():
             "header_voted_nibbles_count": len(header_voted_nibbles),
             "header_pred_chunk_nibbles": header_pred_chunk_nibbles,
             "header_voted_nibbles": header_voted_nibbles,
+            "header_chunk_confidences": header_chunk_conf,
+            "header_voted_confidences": header_voted_conf,
             "decoded_message_length": 0,
             "payload_chunks_needed": 0,
             "total_needed_chunks": 0,
@@ -738,6 +766,7 @@ def main():
             "payload_crc_ok": False,
             "uncorrectable_count": 0,
             "corrected_bits": 0,
+            "ecc_error_locations": [],
             "sync_lock": f"Aligned ({alignment_offset:+.1f}s)",
             "sync_ber": min_ber,
             "alignment_offset_seconds": alignment_offset,
@@ -759,6 +788,8 @@ def main():
             "header_hex": header_info.get("header_hex"),
             "payload_pred_chunk_nibbles": [],
             "payload_voted_nibbles": [],
+            "payload_chunk_confidences": [],
+            "payload_voted_confidences": [],
             "sync_pattern": [10, 10, 4, 1, 5, 5, 5, 2, 4, 1, 10, 10],
             "repeat_factor": repeat_factor,
             "failure_reason": header_info.get("failure_reason"),
@@ -798,22 +829,19 @@ def main():
             f"But only {payload_block.size(0)} chunks are available."
         )
 
-    # Decode payload block
-    payload_pred_chunk_nibbles = []
-    for i in range(payload_chunks_needed):
-        n = decode_single_chunk_to_nibble(decoder, payload_block[i:i+1], cfg, device)
-        payload_pred_chunk_nibbles.append(n)
-
-    # Majority vote
-    payload_voted_nibbles = majority_vote_repeated_nibbles(
-        payload_pred_chunk_nibbles,
-        repeat_factor=repeat_factor
+    # Decode payload block (Batched) - NOW EXTRACTING CONFIDENCE
+    payload_pred_chunk_nibbles, payload_chunk_conf = decode_chunk_block_to_nibbles(
+        decoder, payload_block, cfg, device, batch_size=32
     )
 
-    # ECC decoding
-    payload_bytes, uncorrectable_count, corrected_bits = decode_payload_ecc(
-        payload_voted_nibbles,
-        header_info["ecc_scheme"]
+    # Majority vote - NOW EXTRACTING VOTED CONFIDENCE
+    payload_voted_nibbles, payload_voted_conf = majority_vote_repeated_nibbles(
+        payload_pred_chunk_nibbles, payload_chunk_conf, repeat_factor=repeat_factor
+    )
+
+    # ECC decoding - NOW EXTRACTING ERROR LOCATIONS
+    payload_bytes, uncorrectable_count, corrected_bits, error_locations = decode_payload_ecc(
+        payload_voted_nibbles, header_info["ecc_scheme"]
     )
 
     # Check payload CRC
@@ -883,6 +911,8 @@ def main():
     print("-" * 80)
     print("Header first 12 chunk nibbles :", header_pred_chunk_nibbles[:12])
     print("Payload first 24 chunk nibbles:", payload_pred_chunk_nibbles[:24])
+    
+    # FINAL JSON EXPORT (Now includes confidence arrays and error locations)
     diagnostics = {
         "stego_file": args.stego,
         "total_chunks": chunks.size(0),
@@ -890,6 +920,8 @@ def main():
         "header_voted_nibbles_count": len(header_voted_nibbles),
         "header_pred_chunk_nibbles": header_pred_chunk_nibbles,
         "header_voted_nibbles": header_voted_nibbles,
+        "header_chunk_confidences": header_chunk_conf,
+        "header_voted_confidences": header_voted_conf,
         "decoded_message_length": payload_len,
         "payload_chunks_needed": payload_chunks_needed,
         "total_needed_chunks": total_needed_chunks,
@@ -904,6 +936,7 @@ def main():
         "payload_crc_ok": crc_ok,
         "uncorrectable_count": uncorrectable_count,
         "corrected_bits": corrected_bits,
+        "ecc_error_locations": error_locations,
         "sync_lock": f"Aligned ({alignment_offset:+.1f}s)",
         "sync_ber": min_ber,
         "alignment_offset_seconds": alignment_offset,
@@ -925,12 +958,12 @@ def main():
         "header_hex": header_info.get("header_hex"),
         "payload_pred_chunk_nibbles": payload_pred_chunk_nibbles,
         "payload_voted_nibbles": payload_voted_nibbles,
+        "payload_chunk_confidences": payload_chunk_conf,
+        "payload_voted_confidences": payload_voted_conf,
         "sync_pattern": [10, 10, 4, 1, 5, 5, 5, 2, 4, 1, 10, 10],
         "repeat_factor": repeat_factor,
     }
     print("AURA_DIAGNOSTICS_JSON:", json.dumps(diagnostics, sort_keys=True))
     print("=" * 80)
-
-
 if __name__ == "__main__":
     main()

@@ -12,13 +12,13 @@ import time
 import uuid
 import wave
 import difflib
+import threading
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from services.db import get_db
-
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 MODEL_DIR = BASE_DIR / "aura-model-v1"
@@ -32,6 +32,207 @@ SENDER_SCRIPT = MODEL_DIR / "aura_v2r_sender.py"
 RECEIVER_SCRIPT = MODEL_DIR / "aura_v2r_receiver.py"
 CONFIG_FILE = MODEL_DIR / "aura_v2r_config.json"
 WEIGHTS_FILE = MODEL_DIR / "aura_v2r_decoder_only.pt"
+
+# ============================================================
+# RESIDENT PYTORCH MODEL (MEMORY OPTIMIZATION)
+# ============================================================
+if str(MODEL_DIR) not in sys.path:
+    sys.path.insert(0, str(MODEL_DIR))
+
+import torch
+import aura_v2r_receiver
+
+
+
+_DECODER_MODEL = None
+_DECODER_DEVICE = None
+_DECODER_CFG = None
+_DECODER_LOCK = threading.Lock()
+
+def get_decoder():
+    """
+    Loads the PyTorch model into RAM exactly once. 
+    Eliminates the 5+ second 'Cold Boot' penalty for all decode requests.
+    """
+    global _DECODER_MODEL, _DECODER_DEVICE, _DECODER_CFG
+    with _DECODER_LOCK:
+        if _DECODER_MODEL is None:
+            print("[Aura Service] Cold-booting PyTorch model into RAM...")
+            _DECODER_CFG = aura_v2r_receiver.load_cfg(str(CONFIG_FILE))
+            _DECODER_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            _DECODER_MODEL = aura_v2r_receiver.AuraV2RDecoder(
+                out_bits=_DECODER_CFG["logical_bits_per_chunk"], base_ch=32
+            ).to(_DECODER_DEVICE)
+            ckpt = torch.load(str(WEIGHTS_FILE), map_location=_DECODER_DEVICE)
+            _DECODER_MODEL.load_state_dict(ckpt["decoder_state_dict"])
+            _DECODER_MODEL.eval()
+            print("[Aura Service] PyTorch model locked in memory successfully.")
+    return _DECODER_MODEL, _DECODER_DEVICE, _DECODER_CFG
+
+def execute_receiver_in_memory(stego_path: Path) -> dict[str, Any]:
+    """
+    Directly runs the batched receiver logic in memory without subprocess overhead.
+    Returns the exact diagnostics dictionary instantly, including confidence and ECC data.
+    """
+    decoder, device, cfg = get_decoder()
+    wav, _ = aura_v2r_receiver.load_audio_mono_16k_for_decode(str(stego_path), target_sr=cfg["sample_rate"])
+    
+    best_offset, best_shift, min_ber = aura_v2r_receiver.find_alignment(decoder, wav, cfg, device)
+    aligned_wav = wav[:, best_offset:]
+    chunks = aura_v2r_receiver.chunk_audio_tensor(aligned_wav, cfg["chunk_samples"])
+    
+    if chunks.size(0) == 0:
+        raise RuntimeError("Stego file is too short or empty after chunking.")
+
+    header_start = 12 - best_shift
+    if header_start < 0:
+        raise RuntimeError(f"Sync shift {best_shift} is too large, header starts at negative index.")
+
+    repeat_factor = cfg.get("repeat_factor", 3)
+    header_chunks_needed = 48 * repeat_factor
+    header_block = chunks[header_start : header_start + header_chunks_needed]
+    
+    if header_block.size(0) < header_chunks_needed:
+        raise RuntimeError("Stego file too short to decode header.")
+
+    # --- NEW: Unpack header confidences ---
+    header_pred_chunk_nibbles, header_chunk_conf = aura_v2r_receiver.decode_chunk_block_to_nibbles(decoder, header_block, cfg, device)
+    header_voted_nibbles, header_voted_conf = aura_v2r_receiver.majority_vote_repeated_nibbles(header_pred_chunk_nibbles, header_chunk_conf, repeat_factor=repeat_factor)
+    header_info = aura_v2r_receiver.unpack_header(header_voted_nibbles)
+
+    alignment_offset = (best_offset / cfg["sample_rate"]) - (best_shift * cfg["chunk_seconds"])
+
+    if not header_info.get("checksum_ok"):
+        return {
+            "checksum_ok": False,
+            "stego_file": str(stego_path),
+            "total_chunks": chunks.size(0),
+            "header_chunks": header_chunks_needed,
+            "header_voted_nibbles_count": len(header_voted_nibbles),
+            "header_pred_chunk_nibbles": header_pred_chunk_nibbles,
+            "header_voted_nibbles": header_voted_nibbles,
+            "header_chunk_confidences": header_chunk_conf,
+            "header_voted_confidences": header_voted_conf,
+            "decoded_message_length": 0,
+            "payload_chunks_needed": 0,
+            "total_needed_chunks": 0,
+            "ignored_tail_chunks": 0,
+            "transmission_id": None,
+            "part_index": None,
+            "total_parts": None,
+            "ecc_scheme": None,
+            "codec_hint": None,
+            "payload_crc_expected": None,
+            "payload_crc_calculated": None,
+            "payload_crc_ok": False,
+            "uncorrectable_count": 0,
+            "corrected_bits": 0,
+            "ecc_error_locations": [],
+            "sync_lock": f"Aligned ({alignment_offset:+.1f}s)",
+            "sync_ber": min_ber,
+            "alignment_offset_seconds": alignment_offset,
+            "alignment_offset_samples": best_offset,
+            "sync_shift_chunks": best_shift,
+            "payload_hex": "",
+            "payload_byte_length": 0,
+            "raw_text": "",
+            "corrected_text": "",
+            "changes": [],
+            "header_timestamp": None,
+            "header_chunk_count": 0,
+            "header_checksum_ok": False,
+            "header_checksum_corrected": False,
+            "header_correction_byte": None,
+            "header_correction_bit": None,
+            "header_checksum_received": header_info.get("checksum_received"),
+            "header_checksum_calculated": header_info.get("checksum_calculated"),
+            "header_hex": header_info.get("header_hex"),
+            "payload_pred_chunk_nibbles": [],
+            "payload_voted_nibbles": [],
+            "payload_chunk_confidences": [],
+            "payload_voted_confidences": [],
+            "sync_pattern": [10, 10, 4, 1, 5, 5, 5, 2, 4, 1, 10, 10],
+            "repeat_factor": repeat_factor,
+            "failure_reason": header_info.get("failure_reason"),
+        }
+
+    payload_len = header_info["payload_len"]
+    if header_info["ecc_scheme"] == 1:
+        payload_nibbles_count = payload_len * 4
+    else:
+        payload_nibbles_count = payload_len * 2
+
+    payload_chunks_needed = payload_nibbles_count * repeat_factor
+    total_needed_chunks = 12 + header_chunks_needed + payload_chunks_needed + 12
+    payload_start = 12 + header_chunks_needed - best_shift
+
+    payload_block = chunks[payload_start : payload_start + payload_chunks_needed]
+    if payload_block.size(0) < payload_chunks_needed:
+        raise RuntimeError("Stego file shorter than declared payload length.")
+
+    # --- NEW: Unpack payload confidences and ECC error locations ---
+    payload_pred_chunk_nibbles, payload_chunk_conf = aura_v2r_receiver.decode_chunk_block_to_nibbles(decoder, payload_block, cfg, device)
+    payload_voted_nibbles, payload_voted_conf = aura_v2r_receiver.majority_vote_repeated_nibbles(payload_pred_chunk_nibbles, payload_chunk_conf, repeat_factor=repeat_factor)
+    payload_bytes, uncorrectable_count, corrected_bits, error_locations = aura_v2r_receiver.decode_payload_ecc(payload_voted_nibbles, header_info["ecc_scheme"])
+
+    calculated_crc = aura_v2r_receiver.crc16(payload_bytes)
+    crc_ok = (calculated_crc == header_info["crc_payload"])
+
+    raw_text = payload_bytes.decode("ascii", errors="ignore")
+    corrected_text, changes = aura_v2r_receiver.postprocess_aura_text(raw_text)
+    extra_tail_chunks = max(0, chunks.size(0) - (total_needed_chunks - best_shift))
+
+    return {
+        "checksum_ok": True,
+        "stego_file": str(stego_path),
+        "total_chunks": chunks.size(0),
+        "header_chunks": header_chunks_needed,
+        "header_voted_nibbles_count": len(header_voted_nibbles),
+        "header_pred_chunk_nibbles": header_pred_chunk_nibbles,
+        "header_voted_nibbles": header_voted_nibbles,
+        "header_chunk_confidences": header_chunk_conf,
+        "header_voted_confidences": header_voted_conf,
+        "decoded_message_length": payload_len,
+        "payload_chunks_needed": payload_chunks_needed,
+        "total_needed_chunks": total_needed_chunks,
+        "ignored_tail_chunks": extra_tail_chunks,
+        "transmission_id": header_info["tx_id"],
+        "part_index": header_info["part_index"],
+        "total_parts": header_info["total_parts"],
+        "ecc_scheme": header_info["ecc_scheme"],
+        "codec_hint": header_info["codec_hint"],
+        "payload_crc_expected": header_info["crc_payload"],
+        "payload_crc_calculated": calculated_crc,
+        "payload_crc_ok": crc_ok,
+        "uncorrectable_count": uncorrectable_count,
+        "corrected_bits": corrected_bits,
+        "ecc_error_locations": error_locations,
+        "sync_lock": f"Aligned ({alignment_offset:+.1f}s)",
+        "sync_ber": min_ber,
+        "alignment_offset_seconds": alignment_offset,
+        "alignment_offset_samples": best_offset,
+        "sync_shift_chunks": best_shift,
+        "payload_hex": payload_bytes.hex(),
+        "payload_byte_length": len(payload_bytes),
+        "raw_text": raw_text,
+        "corrected_text": corrected_text,
+        "changes": changes,
+        "header_timestamp": header_info["timestamp"],
+        "header_chunk_count": header_info["chunk_count"],
+        "header_checksum_ok": header_info.get("checksum_ok"),
+        "header_checksum_corrected": header_info.get("checksum_corrected"),
+        "header_correction_byte": header_info.get("correction_byte"),
+        "header_correction_bit": header_info.get("correction_bit"),
+        "header_checksum_received": header_info.get("checksum_received"),
+        "header_checksum_calculated": header_info.get("checksum_calculated"),
+        "header_hex": header_info.get("header_hex"),
+        "payload_pred_chunk_nibbles": payload_pred_chunk_nibbles,
+        "payload_voted_nibbles": payload_voted_nibbles,
+        "payload_chunk_confidences": payload_chunk_conf,
+        "payload_voted_confidences": payload_voted_conf,
+        "sync_pattern": [10, 10, 4, 1, 5, 5, 5, 2, 4, 1, 10, 10],
+        "repeat_factor": repeat_factor,
+    }
 
 APPROVED_SAFE_CARRIERS = [
     "carrier_01_02min.wav",
@@ -162,19 +363,16 @@ def apply_dsp_simulation(
         shutil.copy(str(input_path), str(output_path))
         return
 
-    # 1. Additive Gaussian noise
     if noise_level > 0:
         std = (noise_level / 100.0) * 0.15
         noise = np.random.normal(0, std, size=samples.shape).astype(np.float32)
         samples = samples + noise
 
-    # 2. Clipping saturation
     if clipping_level < 100:
         threshold = 0.05 + (clipping_level / 100.0) * 0.95
         samples = np.clip(samples, -threshold, threshold)
         samples = samples / threshold * 0.95
 
-    # 3. Transcoding Simulation (FFT-based Low-Pass Filter + 12-bit quantization)
     if transcode_type in ("MP3", "Opus"):
         cutoff_hz = 12000.0 if transcode_type == "Opus" else 16000.0
         n_samples = len(samples)
@@ -184,10 +382,8 @@ def apply_dsp_simulation(
             fft_vals[freqs > cutoff_hz] = 0.0
             samples = np.fft.irfft(fft_vals, n=n_samples).astype(np.float32)
         
-        # 12-bit quantization
         samples = np.round(samples * 2048.0) / 2048.0
 
-    # Save as 16-bit PCM WAV
     output_path.parent.mkdir(parents=True, exist_ok=True)
     scaled = np.clip(samples * 32767.0, -32768.0, 32767.0).astype(np.int16)
     with wave.open(str(output_path), "wb") as wf:
@@ -222,12 +418,6 @@ def build_spectrogram(
     sample_rate: int = 16000,
     n_fft: int = 1024,
 ) -> dict[str, Any]:
-    """
-    Build a real STFT-style magnitude spectrogram.
-
-    Values are frequency rows from low to high, each containing time-bin columns.
-    Intensities are log-magnitude normalized over an 80 dB window.
-    """
     if not samples:
         return {
             "timeBins": time_bins,
@@ -663,6 +853,8 @@ def build_encode_transmission_plan(text: str, ecc_scheme: int = 0, use_parity: b
     hit_segment_cap = False
     hit_duration_cap = False
 
+    MIN_PAYLOAD_THRESHOLD = 16 # Don't start a new segment if < 5 bytes remain
+    
     while remaining > 0:
         if len(segments) >= max_text_segments:
             hit_segment_cap = True
@@ -670,10 +862,23 @@ def build_encode_transmission_plan(text: str, ecc_scheme: int = 0, use_parity: b
 
         carrier = carriers_desc[carrier_index % len(carriers_desc)]
         carrier_index += 1
-        assign = min(remaining, int(carrier["usable_payload_bytes"]))
+        
+        # LOGIC CHANGE: If this is the last carrier/segment and we are below threshold,
+        # try to force-fit the remaining bytes if the carrier has even a little extra room,
+        # OR just take the remaining bytes if we are on our very last allowed segment.
+        
+        can_fit = int(carrier["usable_payload_bytes"])
+        
+        # If remaining is tiny, prefer to jam it into this carrier if possible
+        if remaining < MIN_PAYLOAD_THRESHOLD and remaining <= can_fit:
+            assign = remaining
+        else:
+            assign = min(remaining, can_fit)
+
         segment_chunks = header_chunks + (assign * chunks_per_char)
         segment_seconds = segment_chunks * chunk_seconds
         projected_seconds = required_seconds + segment_seconds
+        
         if (projected_seconds / 60.0) > MAX_TOTAL_TRANSMISSION_MINUTES + 1e-9:
             hit_duration_cap = True
             break
@@ -697,7 +902,7 @@ def build_encode_transmission_plan(text: str, ecc_scheme: int = 0, use_parity: b
         required_chunks += segment_chunks
         required_seconds = projected_seconds
         available_payload += carrier["usable_payload_bytes"]
-
+        
     if use_parity and remaining == 0 and len(segments) > 0:
         max_assign = max(seg["assignedPayloadBytes"] for seg in segments)
         parity_chunks = header_chunks + (max_assign * chunks_per_char)
@@ -1465,27 +1670,11 @@ def decode_audio_path(path: Path, message_id: str | None = None, timeout_seconds
     if message_id is None:
         message_id = path.stem
 
-    command = [
-        sys.executable,
-        str(RECEIVER_SCRIPT),
-        "--config",
-        str(CONFIG_FILE),
-        "--weights",
-        str(WEIGHTS_FILE),
-        "--stego",
-        str(path),
-    ]
-    completed = subprocess.run(
-        command,
-        cwd=str(MODEL_DIR),
-        capture_output=True,
-        text=True,
-        timeout=timeout_seconds,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(completed.stderr.strip() or completed.stdout.strip())
+    try:
+        parsed = execute_receiver_in_memory(path)
+    except Exception as e:
+        raise RuntimeError(f"Decode failed: {e}")
 
-    parsed = parse_receiver_stdout(completed.stdout)
     props = get_wav_props(path)
     total_chunks = int(props["audio_duration_sec"] // float(cfg["chunk_seconds"]))
 
@@ -1501,12 +1690,12 @@ def decode_audio_path(path: Path, message_id: str | None = None, timeout_seconds
         **props,
         "total_chunks": parsed.get("total_chunks", total_chunks),
         "header_chunks": parsed.get("header_chunks", HEADER_NIBBLES * cfg["repeat_factor"]),
-        "header_voted_nibbles": parsed.get("header_voted_nibbles", HEADER_NIBBLES),
+        "header_voted_nibbles": parsed.get("header_voted_nibbles_count", HEADER_NIBBLES),
         "decoded_message_length": parsed.get("decoded_message_length", 0),
         "payload_chunks_needed": parsed.get("payload_chunks_needed", 0),
         "total_needed_chunks": parsed.get("total_needed_chunks", 0),
         "ignored_tail_chunks": parsed.get("ignored_tail_chunks", 0),
-        "header_valid": True,
+        "header_valid": header_valid,
         "raw_text": parsed.get("raw_text", ""),
         "corrected_text": parsed.get("corrected_text", ""),
         "changes": parsed.get("changes", []),
@@ -1514,8 +1703,8 @@ def decode_audio_path(path: Path, message_id: str | None = None, timeout_seconds
             parsed.get("raw_text", ""),
             parsed.get("corrected_text", ""),
             parsed.get("changes", []),
-        ),
-        "receiver_stdout": completed.stdout,
+        ) if success else "failed",
+        "receiver_stdout": "Decoded natively in memory.",
         "transmission_id": parsed.get("transmission_id"),
         "part_index": parsed.get("part_index"),
         "total_parts": parsed.get("total_parts"),
@@ -1543,16 +1732,23 @@ def decode_audio_path(path: Path, message_id: str | None = None, timeout_seconds
         "header_checksum_calculated": parsed.get("header_checksum_calculated"),
         "header_hex": parsed.get("header_hex"),
         "header_pred_chunk_nibbles": parsed.get("header_pred_chunk_nibbles"),
-        "header_voted_nibbles_values": parsed.get("header_voted_nibbles_values"),
+        "header_voted_nibbles_values": parsed.get("header_voted_nibbles"),
         "payload_pred_chunk_nibbles": parsed.get("payload_pred_chunk_nibbles"),
         "payload_voted_nibbles": parsed.get("payload_voted_nibbles"),
+        # --- NEW: Forwarding Timeline Rendering Data to Frontend ---
+        "header_chunk_confidences": parsed.get("header_chunk_confidences", []),
+        "header_voted_confidences": parsed.get("header_voted_confidences", []),
+        "payload_chunk_confidences": parsed.get("payload_chunk_confidences", []),
+        "payload_voted_confidences": parsed.get("payload_voted_confidences", []),
+        "ecc_error_locations": parsed.get("ecc_error_locations", []),
         "sync_pattern": parsed.get("sync_pattern"),
         "repeat_factor": parsed.get("repeat_factor"),
-        "decoder_diagnostics": parsed.get("decoder_diagnostics"),
+        "decoder_diagnostics": parsed,
     }
     if persist:
         save_decode_record(message_id, result)
     return result
+
 
 
 def decode_audio_paths(paths: list[Path], per_file_timeout_seconds: float = 300) -> dict[str, Any]:
@@ -1753,7 +1949,14 @@ def load_records() -> dict[str, Any]:
     path = BASE_DIR / "instance" / "aura_records.json"
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+        
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        # If the file ever gets corrupted during the demo, catch the error, 
+        # print a warning, and start fresh instead of crashing the server!
+        print("[WARNING] aura_records.json was corrupted. Starting fresh to prevent 500 Error.")
+        return {}
 
 
 def save_records(records: dict[str, Any]) -> None:
@@ -1788,8 +1991,6 @@ def recover_grouped_transmission(
     if not paths:
         raise RuntimeError("No audio files provided for grouped recovery.")
     if len(paths) == 1:
-        # Wait, if it has 1 path, we still want to recover grouped if it was originally grouped.
-        # So we parse transmission details to see if total_parts > 1.
         parsed_single = parse_transmission_filename(paths[0].name)
         if parsed_single is None or parsed_single["total_segments"] <= 1:
             return decode_audio_path(paths[0], message_id=paths[0].stem, timeout_seconds=per_file_timeout_seconds, persist=persist)
@@ -1889,7 +2090,6 @@ def recover_grouped_transmission(
             traceback.print_exc()
             failed_segments.append(idx)
 
-    # Check for parity packet presence
     has_parity = False
     parity_idx = None
     for idx, dec in decoded_parts.items():
@@ -2803,10 +3003,6 @@ def _build_grouped_analysis_from_reveal(
     cfg: dict[str, Any],
     elapsed_ms: int,
 ) -> dict[str, Any]:
-    """
-    Build a fully renderable Analysis payload from grouped Reveal-style reconstruction.
-    This is the critical fallback when no persisted forensic artifact exists.
-    """
     audio_paths: list[Path] = source.get("audio_paths") or []
     total_files = int(source.get("files_total") or len(audio_paths) or 1)
     transmission_id = source.get("transmission_id")
@@ -3155,7 +3351,6 @@ def analyze_message(
         
     files_total = int(source.get("files_total") or max(1, len(expected_audio_paths) or len(audio_paths) or 1))
 
-    # Parse simulation options
     is_simulation = False
     sim_noise = 0.0
     sim_clipping = 100.0

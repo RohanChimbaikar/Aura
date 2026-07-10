@@ -17,7 +17,7 @@ const navSections = [
     label: 'Workspace',
     items: [
       { key: 'chat', label: 'Chat', icon: MessageCircle, badge: null },
-      { key: 'encode', label: 'Encode', icon: Sparkles, badge: 'New' },
+      { key: 'encode', label: 'Encode', icon: Sparkles, badge: null },
       { key: 'reveal', label: 'Decode', icon: AudioLines, badge: null },
     ],
   },
@@ -30,7 +30,7 @@ const navSections = [
       key: 'compare',
       label: 'Compare',
       icon: GitCompare,
-      badge: null,
+      badge: 'new',
     },
   ],
 },

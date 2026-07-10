@@ -62,6 +62,9 @@ type RevealResult = {
   payload_chunks_needed?: number
   ignored_tail_chunks?: number
   header_valid?: boolean
+  corrected_bits?: number
+  header_checksum_corrected?: boolean
+  header_correction_details?: string[]
   segments: Array<{
     segment_index?: number
     file_name?: string
@@ -211,8 +214,8 @@ function RevealPageContent({ selectedAudio, decodeResult, onDecoded }: Props) {
     [selectedFiles, uploadedFiles],
   )
   const normalizedResult = useMemo(
-    () => localResult ?? normalizeRevealResponse(decodeResult),
-    [decodeResult, localResult],
+    () => localResult ?? normalizeRevealResponse(decodeResult, session),
+    [decodeResult, localResult, session],
   )
   const hasResult = Boolean(normalizedResult)
   const phases = getRevealPhases(session, normalizedResult)
@@ -289,7 +292,6 @@ function RevealPageContent({ selectedAudio, decodeResult, onDecoded }: Props) {
       resetSession(false)
       void startReveal()
     }
-    // Preserve selected-audio auto-decode without re-triggering on unrelated state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAudio?.messageId, selectedAudio?.transmissionId])
 
@@ -958,14 +960,42 @@ function ResultPanel({
       </div>
 
       <div className="rounded-2xl border border-aura-border/10 bg-aura-surface px-4 py-3.5 shadow-sm">
-        <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-aura-muted/60">
+        <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-aura-muted/60">
           Corrections applied
         </div>
-        <p className="break-words text-sm leading-6 text-aura-muted">
-          {changes.length
-            ? changes.map((change) => `${change.from ?? ''} -> ${change.to ?? ''}`).join(' · ')
-            : 'No corrections applied'}
-        </p>
+        <div className="space-y-2">
+          {changes.length > 0 || (result.corrected_bits ?? 0) > 0 || result.header_checksum_corrected ? (
+            <>
+              {/* Header Corrections */}
+              {result.header_checksum_corrected ? (
+                <div className="flex items-start gap-2 text-sm">
+                  <span className="mt-0.5 rounded-[4px] bg-aura-danger/10 px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-aura-danger">Header</span>
+                  <span className="text-aura-muted">Single-bit flip healed via checksum recovery</span>
+                </div>
+              ) : null}
+              
+              {/* Hamming ECC Corrections */}
+              {(result.corrected_bits ?? 0) > 0 ? (
+                <div className="flex items-start gap-2 text-sm">
+                  <span className="mt-0.5 rounded-[4px] bg-aura-accent/10 px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-aura-accent">ECC</span>
+                  <span className="text-aura-muted">{result.corrected_bits} bit(s) healed via Hamming parity</span>
+                </div>
+              ) : null}
+              
+              {/* Dictionary Text Corrections */}
+              {changes.length > 0 ? (
+                <div className="flex items-start gap-2 text-sm">
+                  <span className="mt-0.5 rounded-[4px] bg-aura-reveal/10 px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-aura-reveal">Text</span>
+                  <span className="text-aura-muted">
+                    {changes.map((change) => `${change.from ?? ''} -> ${change.to ?? ''}`).join(' · ')}
+                  </span>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <p className="text-sm leading-6 text-aura-muted">No corrections applied. Signal decoded cleanly.</p>
+          )}
+        </div>
       </div>
 
       {segments.length ? (
@@ -1126,6 +1156,41 @@ function normalizeRevealResponse(raw: unknown, session?: RevealSessionState): Re
       : success
         ? 'complete'
         : 'failed'
+
+  // --- NEW: Extract hardware-level corrections (ECC and Header) ---
+  let corrected_bits = typeof value.corrected_bits === 'number' ? value.corrected_bits : 0;
+  let header_checksum_corrected = value.header_checksum_corrected === true;
+  let header_correction_details: string[] = [];
+
+  // If grouped transmission, aggregate the stats from all the segments
+  if (mode === 'multi' && value.decoder_diagnostics && Array.isArray((value.decoder_diagnostics as any).segments)) {
+    const segs = (value.decoder_diagnostics as any).segments;
+    
+    corrected_bits = segs.reduce((sum: number, seg: any) => sum + (seg.metrics?.correctedBits ?? seg.diagnostics?.corrected_bits ?? 0), 0);
+    header_checksum_corrected = segs.some((seg: any) => seg.metrics?.headerChecksumCorrected === true || seg.diagnostics?.header_checksum_corrected === true);
+    
+    // Check every part for a header correction and log its exact location
+    segs.forEach((seg: any, idx: number) => {
+      const isCorrected = seg.metrics?.headerChecksumCorrected === true || seg.diagnostics?.header_checksum_corrected === true;
+      if (isCorrected) {
+        const byte = seg.metrics?.headerCorrectionByte ?? seg.diagnostics?.header_correction_byte;
+        const bit = seg.metrics?.headerCorrectionBit ?? seg.diagnostics?.header_correction_bit;
+        if (byte != null && bit != null) {
+          header_correction_details.push(`Part ${idx + 1}: Byte ${byte}, Bit ${bit}`);
+        }
+      }
+    });
+  } else {
+    // Single file logic
+    if (header_checksum_corrected) {
+      const byte = value.header_correction_byte;
+      const bit = value.header_correction_bit;
+      if (byte != null && bit != null) {
+        header_correction_details.push(`Byte ${byte}, Bit ${bit}`);
+      }
+    }
+  }
+
   return {
     success,
     mode,
@@ -1146,6 +1211,9 @@ function normalizeRevealResponse(raw: unknown, session?: RevealSessionState): Re
     header_valid: typeof value.header_valid === 'boolean' ? value.header_valid : undefined,
     segments,
     error: typeof value.error === 'string' ? value.error : undefined,
+    corrected_bits,
+    header_checksum_corrected,
+    header_correction_details,
   }
 }
 
