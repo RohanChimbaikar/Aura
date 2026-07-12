@@ -1,8 +1,13 @@
 import { useState, useEffect, type FormEvent } from 'react'
-import { LockKeyhole, Mail, User, UserPlus } from 'lucide-react'
-import { PrimaryActionButton } from '../components/ActionButtons'
-import { SurfacePanel } from '../components/SurfacePanel'
+import { Lock, Eye, EyeOff, Mail, User, ShieldCheck, Activity, Code, ArrowRight } from 'lucide-react'
+import ColorBends from '../components/ColorBends/ColorBends'
 import { AuraLogo } from '../components/AuraLogo'
+
+declare global {
+  interface Window {
+    google: any
+  }
+}
 
 type Props = {
   onRegister: (payload: Record<string, string>) => Promise<void> | void
@@ -17,7 +22,6 @@ export function SignUpScreen({
   onGoogleLogin,
   onBackToLogin,
   error: serverError,
-  theme
 }: Props) {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -25,6 +29,8 @@ export function SignUpScreen({
   const [confirmPassword, setConfirmPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [localError, setLocalError] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
 
   // Load Google GIS SDK
   useEffect(() => {
@@ -55,11 +61,11 @@ export function SignUpScreen({
         const container = document.getElementById('google-signup-btn-container')
         if (container) {
           window.google.accounts.id.renderButton(container, {
-            theme: theme === 'light' ? 'outline' : 'filled_black',
+            theme: 'outline',
             size: 'large',
             text: 'signup_with',
             width: container.clientWidth || 360,
-            shape: 'pill'
+            shape: 'rectangular'
           })
         }
       } else {
@@ -70,7 +76,7 @@ export function SignUpScreen({
     return () => {
       active = false
     }
-  }, [onGoogleLogin, theme])
+  }, [onGoogleLogin])
 
   // Password validation checks
   const hasMinLen = password.length >= 8
@@ -117,157 +123,269 @@ export function SignUpScreen({
   }
 
   return (
-    <div className="relative min-h-screen overflow-y-auto bg-aura-bg px-6 py-10 text-aura-text flex flex-col items-center justify-center">
-      <div className="pointer-events-none absolute inset-0 bg-noise opacity-55" />
-      <div className="pointer-events-none absolute left-1/2 top-20 h-[360px] w-[360px] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(93,87,255,0.12),transparent_65%)] blur-3xl" />
-
-      <div className="relative w-full max-w-[420px] flex flex-col items-center">
-        {/* Large Enlarged SVG Logo & Tagline */}
-        <div className="mb-8 flex flex-col items-center text-center">
-          <AuraLogo className="h-16 md:h-20 w-auto text-aura-text filter drop-shadow-[0_0_15px_rgba(93,87,255,0.15)]" />
-          <h2 className="text-xs font-mono uppercase tracking-[0.4em] text-aura-dim mt-4">
-            Encoded in Sound
-          </h2>
+    <div className="flex min-h-screen w-full bg-[#F8FAFC] font-sans text-slate-900">
+      
+      {/* Left Panel: Branding & Features (Hidden on mobile) */}
+      <div className="hidden lg:flex w-1/2 relative bg-[#F2F6FE] flex-col p-12 xl:p-20 overflow-hidden border-r border-blue-50/50">
+        
+        {/* INTERACTIVE BACKGROUND */}
+        <div className="absolute inset-0 z-0 opacity-60">
+          <ColorBends
+            colors={["#A3C6F2", "#4A90E2", "#80B3F7"]} // Aura theme blues
+            rotation={45}
+            speed={0.15}
+            scale={1.2}
+            frequency={1.5}
+            warpStrength={1.5}
+            mouseInfluence={1.2}
+            noise={0.05}
+            parallax={0.3}
+            iterations={2}
+            intensity={1.2}
+            bandWidth={5}
+            transparent={true}
+          />
         </div>
 
-        {/* Centered Glassmorphic Panel */}
-        <SurfacePanel className="w-full p-6 sm:p-8 backdrop-blur-xl border border-white/[0.08] shadow-[0_20px_50px_rgba(0,0,0,0.35)]">
-          <form className="space-y-4" onSubmit={handleSubmit}>
-            <div>
-              <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-aura-dim">
-                Registration
+        {/* Top/Center Content */}
+        <div className="relative z-10 flex flex-col items-center flex-1 w-full max-w-md mx-auto pt-8 pointer-events-none">
+          
+          {/* SVG Logo */}
+          <div className="flex flex-col items-center mb-10 w-full">
+            <AuraLogo className="text-slate-900 scale-125 my-4" />
+            <div className="h-[2px] w-8 bg-[#4A90E2] rounded-full mt-6" />
+          </div>
+
+          {/* Main Copy */}
+          <div className="text-center mb-12 w-full">
+            <h1 className="text-3xl font-semibold text-slate-900 mb-4 tracking-tight">
+              Join the Aura Network.
+            </h1>
+            <p className="text-slate-600 leading-relaxed text-[15px]">
+              Create your operator profile to start sending and receiving secure, hidden communications embedded directly inside speech audio.
+            </p>
+          </div>
+
+          {/* Feature List */}
+          <div className="space-y-7 w-full pl-4">
+            <div className="flex items-start gap-4">
+              <div className="p-2.5 bg-white/60 text-blue-600 rounded-[14px] backdrop-blur-sm border border-white/40 shadow-sm">
+                <User size={22} strokeWidth={1.5} />
               </div>
-              <div className="mt-1 text-[22px] font-medium text-aura-text">
-                Register Operator
+              <div className="text-left pt-0.5">
+                <h3 className="text-[15px] font-medium text-slate-900 mb-0.5">Operator Identity</h3>
+                <p className="text-sm text-slate-600">Establish your unique, secure operator credentials.</p>
               </div>
             </div>
 
-            <label className="block">
-              <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.18em] text-aura-dim">
-                Full Name
+            <div className="flex items-start gap-4">
+              <div className="p-2.5 bg-white/60 text-blue-600 rounded-[14px] backdrop-blur-sm border border-white/40 shadow-sm">
+                <Activity size={22} strokeWidth={1.5} />
               </div>
-              <div className="flex items-center gap-3 rounded-[22px] border border-aura-border/18 bg-aura-surface/40 px-4 py-2.5">
-                <User size={16} className="text-aura-dim" />
-                <input
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  className="w-full border-none bg-transparent text-sm text-aura-text outline-none placeholder:text-aura-dim"
-                  placeholder="Alice Operator"
-                  required
-                />
-              </div>
-            </label>
-
-            <label className="block">
-              <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.18em] text-aura-dim">
-                Email Address
-              </div>
-              <div className="flex items-center gap-3 rounded-[22px] border border-aura-border/18 bg-aura-surface/40 px-4 py-2.5">
-                <Mail size={16} className="text-aura-dim" />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  className="w-full border-none bg-transparent text-sm text-aura-text outline-none placeholder:text-aura-dim"
-                  placeholder="operator@aura.ai"
-                  required
-                />
-              </div>
-            </label>
-
-            <label className="block">
-              <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.18em] text-aura-dim">
-                Password
-              </div>
-              <div className="flex items-center gap-3 rounded-[22px] border border-aura-border/18 bg-aura-surface/40 px-4 py-2.5">
-                <LockKeyhole size={16} className="text-aura-dim" />
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  className="w-full border-none bg-transparent text-sm text-aura-text outline-none placeholder:text-aura-dim"
-                  placeholder="••••••••"
-                  required
-                />
-              </div>
-            </label>
-
-            <label className="block">
-              <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.18em] text-aura-dim">
-                Confirm Password
-              </div>
-              <div className="flex items-center gap-3 rounded-[22px] border border-aura-border/18 bg-aura-surface/40 px-4 py-2.5">
-                <LockKeyhole size={16} className="text-aura-dim" />
-                <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(event) => setConfirmPassword(event.target.value)}
-                  className="w-full border-none bg-transparent text-sm text-aura-text outline-none placeholder:text-aura-dim"
-                  placeholder="••••••••"
-                  required
-                />
-              </div>
-            </label>
-
-            {/* Password checklist integrated within the card */}
-            <div className="rounded-xl bg-white/[0.01] border border-white/4 p-3 text-[11px] space-y-1 text-aura-muted">
-              <div className="font-semibold text-[9px] uppercase tracking-wider text-aura-dim mb-1">
-                Password Strength Checklist:
-              </div>
-              <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
-                <div className={hasMinLen ? 'text-aura-reveal' : 'text-aura-dim'}>
-                  {hasMinLen ? '✓' : '•'} Min 8 characters
-                </div>
-                <div className={hasUpper && hasLower ? 'text-aura-reveal' : 'text-aura-dim'}>
-                  {hasUpper && hasLower ? '✓' : '•'} Mixed case (A-Z)
-                </div>
-                <div className={hasDigit ? 'text-aura-reveal' : 'text-aura-dim'}>
-                  {hasDigit ? '✓' : '•'} At least one number
-                </div>
-                <div className={hasSpecial ? 'text-aura-reveal' : 'text-aura-dim'}>
-                  {hasSpecial ? '✓' : '•'} Special symbol
-                </div>
+              <div className="text-left pt-0.5">
+                <h3 className="text-[15px] font-medium text-slate-900 mb-0.5">Steganographic Audio</h3>
+                <p className="text-sm text-slate-600">Hide payload text inside cover audio waves imperceptibly.</p>
               </div>
             </div>
 
-            {displayError ? (
-              <div className="rounded-[18px] border border-aura-danger/25 bg-aura-danger/10 px-4 py-2.5 text-sm text-aura-danger">
-                {displayError}
+            <div className="flex items-start gap-4">
+              <div className="p-2.5 bg-white/60 text-blue-600 rounded-[14px] backdrop-blur-sm border border-white/40 shadow-sm">
+                <ShieldCheck size={22} strokeWidth={1.5} />
               </div>
-            ) : null}
-
-            <PrimaryActionButton
-              type="submit"
-              disabled={submitting || !name.trim() || !email.trim() || !password || !confirmPassword}
-              className="w-full"
-            >
-              <UserPlus size={16} className="mr-2" />
-              {submitting ? 'Registering...' : 'Register Profile'}
-            </PrimaryActionButton>
-
-            <div className="relative flex py-2 items-center">
-              <div className="flex-grow border-t border-white/8"></div>
-              <span className="flex-shrink mx-4 text-[9px] uppercase tracking-wider text-aura-dim">or</span>
-              <div className="flex-grow border-t border-white/8"></div>
+              <div className="text-left pt-0.5">
+                <h3 className="text-[15px] font-medium text-slate-900 mb-0.5">Cryptographic Verification</h3>
+                <p className="text-sm text-slate-600">Only recipients with authentic keys can extract hidden messages.</p>
+              </div>
             </div>
+          </div>
+        </div>
 
-            <div className="flex justify-center">
-              <div id="google-signup-btn-container" className="w-full flex justify-center min-h-[40px]"></div>
-            </div>
-
-            <div className="text-center text-xs text-aura-muted">
-              Already registered?{' '}
-              <button
-                type="button"
-                onClick={onBackToLogin}
-                className="text-aura-accent hover:underline font-medium"
-              >
-                Back to Login
-              </button>
-            </div>
-          </form>
-        </SurfacePanel>
+        {/* Left Panel Footer */}
+        <div className="relative z-10 w-full max-w-md mx-auto text-xs text-slate-500 font-medium pt-12 pointer-events-none">
+          © 2025 Aura Project • All rights reserved.
+        </div>
       </div>
+
+      {/* Right Panel: Signup Form */}
+      <div className="w-full lg:w-1/2 flex flex-col relative bg-white lg:bg-transparent overflow-y-auto">
+        <div className="flex-1 flex items-center justify-center p-6 sm:p-12">
+          
+          <div className="w-full max-w-[440px] bg-white lg:rounded-3xl lg:shadow-[0_8px_40px_rgb(0,0,0,0.06)] lg:border border-slate-100 p-2 sm:p-10 z-10">
+            <div className="mb-8">
+              <h2 className="text-3xl font-semibold text-slate-900 tracking-tight">Create operator account</h2>
+              <p className="text-[15px] text-slate-500 mt-2">Sign up to join the secure Aura network</p>
+            </div>
+
+            <form className="space-y-5" onSubmit={handleSubmit}>
+              
+              {/* Full Name Input */}
+              <div>
+                <label className="block text-sm font-medium text-slate-900 mb-2">
+                  Full Name
+                </label>
+                <div className="relative flex items-center group">
+                  <div className="absolute left-4 text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                    <User size={18} strokeWidth={1.5} />
+                  </div>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-[12px] focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-[15px] text-slate-900 placeholder:text-slate-400 transition-all outline-none"
+                    placeholder="Alice Operator"
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Email Address Input */}
+              <div>
+                <label className="block text-sm font-medium text-slate-900 mb-2">
+                  Email Address
+                </label>
+                <div className="relative flex items-center group">
+                  <div className="absolute left-4 text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                    <Mail size={18} strokeWidth={1.5} />
+                  </div>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-[12px] focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-[15px] text-slate-900 placeholder:text-slate-400 transition-all outline-none"
+                    placeholder="operator@aura.ai"
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Password Input */}
+              <div>
+                <label className="block text-sm font-medium text-slate-900 mb-2">
+                  Password
+                </label>
+                <div className="relative flex items-center group">
+                  <div className="absolute left-4 text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                    <Lock size={18} strokeWidth={1.5} />
+                  </div>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full pl-12 pr-12 py-3 bg-white border border-slate-200 rounded-[12px] focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-[15px] text-slate-900 placeholder:text-slate-400 transition-all outline-none"
+                    placeholder="Enter password"
+                    required
+                  />
+                  <button 
+                    type="button" 
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-4 text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    {showPassword ? <Eye size={18} strokeWidth={1.5} /> : <EyeOff size={18} strokeWidth={1.5} />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Confirm Password Input */}
+              <div>
+                <label className="block text-sm font-medium text-slate-900 mb-2">
+                  Confirm Password
+                </label>
+                <div className="relative flex items-center group">
+                  <div className="absolute left-4 text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                    <Lock size={18} strokeWidth={1.5} />
+                  </div>
+                  <input
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full pl-12 pr-12 py-3 bg-white border border-slate-200 rounded-[12px] focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-[15px] text-slate-900 placeholder:text-slate-400 transition-all outline-none"
+                    placeholder="Confirm password"
+                    required
+                  />
+                  <button 
+                    type="button" 
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-4 text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    {showConfirmPassword ? <Eye size={18} strokeWidth={1.5} /> : <EyeOff size={18} strokeWidth={1.5} />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Password strength checklist integrated within the card */}
+              <div className="rounded-[12px] border border-slate-100 bg-slate-50/50 p-3 text-[11px] space-y-1.5 text-slate-500">
+                <div className="font-semibold text-[9.5px] uppercase tracking-wider text-slate-400 mb-1">
+                  Password Strength Checklist
+                </div>
+                <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+                  <div className={hasMinLen ? 'text-emerald-600 font-medium' : 'text-slate-400'}>
+                    {hasMinLen ? '✓' : '•'} Min 8 characters
+                  </div>
+                  <div className={hasUpper && hasLower ? 'text-emerald-600 font-medium' : 'text-slate-400'}>
+                    {hasUpper && hasLower ? '✓' : '•'} Mixed case (A-Z)
+                  </div>
+                  <div className={hasDigit ? 'text-emerald-600 font-medium' : 'text-slate-400'}>
+                    {hasDigit ? '✓' : '•'} At least one number
+                  </div>
+                  <div className={hasSpecial ? 'text-emerald-600 font-medium' : 'text-slate-400'}>
+                    {hasSpecial ? '✓' : '•'} Special symbol
+                  </div>
+                </div>
+              </div>
+
+              {/* Error Message */}
+              {displayError && (
+                <div className="rounded-[12px] border border-red-200 bg-red-50 p-3 text-sm text-red-600">
+                  {displayError}
+                </div>
+              )}
+
+              {/* Submit Button */}
+              <button
+                type="submit"
+                disabled={submitting || !name.trim() || !email.trim() || !password || !confirmPassword}
+                className="w-full py-3 mt-2 bg-gradient-to-r from-[#5598F5] to-[#4585F0] hover:from-[#4485DF] hover:to-[#3872D1] text-white rounded-[12px] font-medium transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {submitting ? 'Registering...' : 'Register Profile'} <ArrowRight size={18} />
+              </button>
+
+              {/* Divider */}
+              <div className="relative flex items-center py-4">
+                <div className="flex-grow border-t border-slate-100"></div>
+                <span className="flex-shrink-0 mx-4 text-[13px] text-slate-400">or</span>
+                <div className="flex-grow border-t border-slate-100"></div>
+              </div>
+
+              {/* Google Button */}
+              <div className="flex justify-center w-full pb-2">
+                <div id="google-signup-btn-container" className="w-full flex justify-center min-h-[44px]"></div>
+              </div>
+
+              {/* Back to Login Link */}
+              <div className="text-center text-sm text-slate-500">
+                Already registered?{' '}
+                <button
+                  type="button"
+                  onClick={onBackToLogin}
+                  className="text-blue-500 hover:text-blue-600 font-medium"
+                >
+                  Back to Login
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        {/* Right Panel Footer (Badges) */}
+        <div className="pb-8 pt-4 flex justify-center items-center gap-6 sm:gap-8 text-[13px] text-slate-500 font-medium bg-white lg:bg-transparent z-10">
+          <div className="flex items-center gap-2"><ShieldCheck size={16} strokeWidth={1.5} /> Secure by design</div>
+          <div className="hidden sm:block w-px h-4 bg-slate-200"></div>
+          <div className="flex items-center gap-2"><Lock size={16} strokeWidth={1.5} /> Local-first</div>
+          <div className="hidden sm:block w-px h-4 bg-slate-200"></div>
+          <div className="flex items-center gap-2"><Code size={16} strokeWidth={1.5} /> Open source</div>
+        </div>
+      </div>
+
     </div>
   )
 }

@@ -2175,7 +2175,7 @@ function getCoreMetrics(
   chunkRows: AnalysisPayload['chunkTable'],
 ): MetricDescriptor[] {
   const insights = getChunkInsights(chunkRows, analysis)
-  const bitAccuracy = getAverageBitAccuracy(insights)
+  // const bitAccuracy = getAverageBitAccuracy(insights)
   const snrAverage =
     averageNullable(chunkRows.map((row) => (typeof row.snrDb === 'number' ? row.snrDb : null))) ??
     analysis.summary.overallSnrDb
@@ -2395,9 +2395,9 @@ function getChunkTone(
   return 'neutral'
 }
 
-function getAverageBitAccuracy(insights: ChunkInsight[]) {
-  return averageNullable(insights.map((insight) => insight.bitAccuracy))
-}
+// function getAverageBitAccuracy(insights: ChunkInsight[]) {
+//   return averageNullable(insights.map((insight) => insight.bitAccuracy))
+// }
 
 function getPayloadDensity(analysis: AnalysisPayload) {
   const structure = analysis.charts.payloadStructure
