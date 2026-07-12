@@ -1,5 +1,9 @@
+# ==============================================================================
+# Aura Steganography Platform - Root Git Ignore Configuration
+# ==============================================================================
+
 # =========================
-# Python
+# Python and Virtual Env
 # =========================
 __pycache__/
 *.pyc
@@ -7,57 +11,52 @@ __pycache__/
 *.pyd
 .pytest_cache/
 .mypy_cache/
-
-# Virtual environments
+.pycache_tmp/
 .venv/
 venv/
 backend/.venv/
-
-# Temp python cache folders
-.pycache_tmp/
 
 # =========================
 # Node / Frontend
 # =========================
 node_modules/
 frontend/node_modules/
-
-# Vite / build outputs
 dist/
 frontend/dist/
-
-# TypeScript build cache
 *.tsbuildinfo
 
 # =========================
-# Environment files
+# Environment configuration
 # =========================
 .env
 .env.*
 !.env.example
+backend/.env
 
 # =========================
-# Local app state / databases
+# Local Databases & State
 # =========================
 *.db
 *.sqlite
 *.sqlite3
-
 backend/instance/*.db
 backend/instance/*.json
 !backend/instance/.gitkeep
 
 # =========================
-# OS / editor junk
+# IDE and Tooling Cache
 # =========================
 .DS_Store
 Thumbs.db
 *~
 *.tmp
 *.log
+.vscode/
+.idea/
+.vexp/
 
 # =========================
-# Aura large/generated artifacts
+# ML Checkpoints
 # =========================
 *.pt
 *.pth
@@ -65,8 +64,25 @@ Thumbs.db
 *.onnx
 *.bin
 
-# Generated media (uncomment if needed later)
+# EXCLUDE required application model weights from ignore
+!backend/aura-model-v1/aura_v2r_decoder_only.pt
+!backend/aura-model-v1/aura_v2r_best.pt
+
+# =========================
+# Audio & Generated Assets
+# =========================
 *.wav
 *.mp3
 *.flac
 *.zip
+
+# EXCLUDE the approved carrier audio bank from ignore
+!backend/aura_carrier_bank/*.wav
+
+# =========================
+# Stego Outputs & Uploads
+# =========================
+backend/outputs/*
+!backend/outputs/.gitkeep
+backend/uploads/*
+!backend/uploads/.gitkeep

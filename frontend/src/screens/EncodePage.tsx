@@ -13,7 +13,7 @@ import { RecipientModal } from '../components/RecipientModal'
 const PRESETS = [
   'the files were altered before review',
   'someone is hiding the audit records',
-  'meet at the old bridge after sunset',
+  'Code Black. Abort mission.',
 ]
 
 type Props = {
