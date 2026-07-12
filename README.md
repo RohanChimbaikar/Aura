@@ -269,34 +269,66 @@ AURA is built on six key engineering principles:
 
 ## 9. Screenshots
 
-AURA features a modern, responsive user interface. Below are placeholders for the primary system interfaces:
+AURA provides a modern, responsive interface that guides users through secure message embedding, communication, decoding, and forensic analysis. The following screenshots showcase the primary components of the platform.
 
-### Login Interface
+### Authentication
 
-![Login Interface](docs/login.png)
-*Figure 1: Secure authentication gateway supporting JWT credentials and Google OAuth 2.0 integration.*
+#### Login
 
-### Secure Chat Workspace
+![Login Interface](assets/Login_Page.png)
 
-![Chat Workspace](docs/chat.png)
-*Figure 2: Real-time messaging window supporting inline steganographic file transfers and quick decoding.*
+*Figure 1: Secure authentication portal supporting JWT-based authentication and Google OAuth 2.0 sign-in.*
 
-### Forensic Analysis Dashboard
+#### Sign Up
 
-![Forensic Analysis Dashboard](docs/analysis.png)
-*Figure 3: Deep dive visualization tool showing waveform delta graphs, confidence charts, and SNR/MSE statistics.*
+![Signup Interface](assets/Signup.png)
 
-### Signal Comparison Tool
-
-![Signal Comparison Screen](docs/compare.png)
-*Figure 4: Side-by-side comparison of cover and stego audio files in both the time and spectral domains.*
-
-### Settings and Diagnostics
-
-![Settings Screen](docs/settings.png)
-*Figure 5: Configuration dashboard for adjusting embedding strength parameters, toggling ECC schemes, and verifying active models.*
+*Figure 2: User registration interface with secure account creation and validation.*
 
 ---
+
+### Message Encoding
+
+![Encode Screen](assets/Encode.png)
+
+*Figure 3: Message embedding workspace where users compose secret messages, select approved carrier audio, and generate steganographic audio files.*
+
+---
+
+### Secure Communication
+
+![Chat Workspace](assets/Chat.png)
+
+*Figure 4: Real-time chat interface supporting secure communication and transmission of encoded audio between authenticated users.*
+
+---
+
+### Audio Analysis
+
+
+![Detailed Analysis](assets/Analysis2.png)
+
+*Figure 5: Extended analysis view providing additional diagnostic information, quality metrics, and detailed signal inspection.*
+
+![Analysis Dashboard](assets/Analysis.png)
+
+*Figure 6: Primary forensic analysis dashboard presenting waveform visualizations, reconstruction metrics, and audio integrity measurements.*
+
+---
+
+### Signal Comparison
+
+![Comparison Screen](assets/Comparison.png)
+
+*Figure 7: Side-by-side comparison interface for evaluating original and steganographic audio using waveform and spectral visualizations.*
+
+---
+
+### Application Settings
+
+![Settings Screen](assets/Settings.png)
+
+*Figure 8: System configuration panel for authentication preferences, interface customization, carrier management, and application settings.*---
 
 ## 10. How It Works
 
